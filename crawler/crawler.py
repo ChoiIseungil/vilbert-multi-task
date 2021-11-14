@@ -10,6 +10,7 @@ import PIL.Image as Image
 import io 
 from urllib.request import urlopen
 import os 
+import datetime
 import time
 import pickle
 import argparse
@@ -28,25 +29,11 @@ from nltk.corpus import stopwords
 # nltk.download('maxent_ne_chunker')
 # nltk.download('words')
 
+Stemmer = nltk.stem.SnowballStemmer('english')
+STOPS = set(stopwords.words('english'))
+STOPS.add("")
 
-# def save_image(title, img, save_path):
-#     for item in csv : 
-#         img_dir = csv["href"]
-#         os.systme("python script/extract_features.py --image_dir ")
-#     img = np.array(img)
-#     img = cv2.resize(img, (256,256), interpolation = cv2.INTER_AREA)
-#     path = os.path.join(save_path, title+'_0.npy')
-#     feature_extractor = FeatureExtractor(img)
-#     feature_extractor.extract_features()
-#     np.save(unique_file(path,'.npy',),img,allow_pickle=True)
-
-
-# def unique_file(basename, ext):
-#     actualname = "%s.%s" % (basename, ext)
-#     c = count()
-#     while os.path.exists(actualname):
-#         actualname = "%s_(%d).%s" % (basename, next(c), ext)
-#     return actualname
+SAVEPATH = "/mnt/nas2/seungil/dataset/result"
 
 
 def clean_parenthesis(data : "str"):
@@ -73,17 +60,10 @@ def generate_nostop_unigrams(s):
     s = s.split()
 
     # 불용어 제거
-    stops = set(stopwords.words('english'))
-    no_stopwords_list = [word for word in s if not word in stops]
+    no_stopwords_list = [word for word in s if not word in STOPS]
 
     # stemming
-    stemmer = nltk.stem.SnowballStemmer('english')
-    stemmer_words = [stemmer.stem(word) for word in no_stopwords_list]
-    
-    s = " ".join(stemmer_words)
-    
-    # Break sentence in the token, remove empty tokens
-    tokens = [token for token in s.split(" ") if token != "" and len(token)!=1]
+    tokens = [Stemmer.stem(word) for word in no_stopwords_list]
     tokens = list(set(tokens))
     return tokens
 
@@ -112,6 +92,7 @@ def computeTF(wordDict, bow): #각 문단에서 캡션과 겹치는 단어가 �
 
 
 def computeIDF(docList): # 각 문단별로 캡션에 있는 단어가 존재하는지 보는 1 or 0의 wordDict들 
+    assert(docList)
     idfDict = {}
     N = len(docList)
     idfDict = dict.fromkeys(docList[0].keys(), 0) # 캡션에 존재하는 단어에 대한 Dict 
@@ -131,27 +112,36 @@ def computeTFIDF(tfBow, idfs):
     for word, val in tfBow.items():
         tfidf[word] = val*idfs[word]
     return tfidf
-    
+
 
 def areSubString(captionSet: set, contextSet: set)-> bool:
     for word in captionSet: 
-        if not any(((word in s) or (s in word)) for s in contextSet): return False
+        # if not any(((word in s) or (s in word)) for s in contextSet): return False
+        if not any((word in s) for s in contextSet): return False
     return True
 
 
 def extract_pairs(title, paragraph, imgs, captions, contexts, page_num):
     new_rows = []
-    for img, caption in zip(imgs, captions) : 
-        if not (img and caption) : break # img caption pair 가 True가 아닐 때 
+    for img, caption in zip(imgs, captions): 
+        if not (img and caption):
+            # print("AAA") 
+            continue # img caption pair 가 True가 아닐 때 
         caption_ner = my_ner(caption) 
 
-        if not caption_ner: break # NE>1 이면
-        valid_contexts = [(c,u) for (c,u) in contexts if areSubString(caption_ner,my_ner(c))]
+        if not caption_ner:
+            # print("BBB") 
+            continue # NE>1 이면
+        valid_contexts = [c for c in contexts if areSubString(caption_ner,my_ner(c[0]))]
 
-        # unigram caption 
-        uni_cap = generate_nostop_unigrams(clean_text(caption))
+        if not valid_contexts:
+            # print("CCC") 
+            continue #NER을 포함하는 context가 없으면
+        uni_cap = generate_nostop_unigrams(caption)
 
-        if len(uni_cap) < 5: break # caption 의 unigram size가 minimum 을 넘지 못할 때 
+        if len(uni_cap) < 5:
+            # print("DDD") 
+            continue # caption 의 unigram size가 minimum 을 넘지 못할 때 
 
         capSet = set(uni_cap) 
 
@@ -180,27 +170,28 @@ def extract_pairs(title, paragraph, imgs, captions, contexts, page_num):
                 max_score = score 
                 max_id = id 
 
-        if max_id == -1:  continue  #all negative weights
+        if max_id == -1:
+            # print("EEE") 
+            continue  #all negative weights
 
-        related_context_NER = my_ner(contexts[max_id])
+        context = valid_contexts[max_id][0]
             
         info_dict = {}
         info_dict["title"] = title
         info_dict["paragraph"] = paragraph
         info_dict["caption"] = caption
-        info_dict["contexts"] = contexts[max_id]
+        info_dict["contexts"] = context
         info_dict["image url"] = img['src']
         info_dict["page num"] = int(page_num)
-
+        info_dict["caption NER"] = caption_ner 
+        info_dict["context NER"] = my_ner(context)
+        info_dict["TFIDF score"] = max_score 
         # info_dict["caption unigram"] = uni_cap
         # info_dict["context unigram"] = unigram_contexts[max_id] 
         # info_dict["TFIDF"] = TFIDF_list[max_id]
 
-        info_dict["caption NER"] = caption_ner 
-        info_dict["context NER"] = related_context_NER
-        info_dict["TFIDF score"] = max_score 
         new_rows.append(info_dict)
-
+    
     return new_rows
 
 
@@ -220,10 +211,9 @@ def get_partial_pairs(href) :
 
   for elem in elements : 
     if elem.select("span.mw-headline"): # 소제목일 때  
-        if H2 : 
-            paragraph = H2.pop(0) 
+        if H2 : paragraph = H2.pop(0) 
         else : continue
-        whole_pairs.append((partial_imgs, partial_captions, partial_contexts, paragraph.text))
+        whole_pairs.append((partial_imgs, partial_captions, partial_contexts, [paragraph.text]))
         partial_imgs, partial_captions, partial_contexts = [], [], []
     elif elem.select("div.thumbinner"): # 이미지를 포함한 div 일 때 
         if elem.select_one("div.thumbinner > div.thumbcaption") :
@@ -231,40 +221,34 @@ def get_partial_pairs(href) :
             partial_captions.append(elem.select_one("div.thumbinner > div.thumbcaption").get_text()) # caption text 만 따옴
     elif elem.name == 'p': # context 일 때
         partial_contexts.append(elem.get_text()) # text 만 따옴 
-  
   return whole_pairs # imgs, captions, context, h2
 
 
 def get_data_from_page(args, page, csv_dataset, page_num):
     title, href = page
     title = clean_text(title)
-
-    updated_csv_dataset = pd.DataFrame()
+    added = 0
 
     whole_pairs = get_partial_pairs(href) 
-    for _, (imgs, captions, contexts, paragraph) in enumerate(whole_pairs) : 
+    for _, (imgs, captions, contexts, paragraphs) in enumerate(whole_pairs) :
+        if not (imgs and captions and contexts and paragraphs): continue
 
-        if imgs and captions and contexts:
-            captions = list(map(clean_text,captions))
-            contexts = list(map(clean_text,contexts))
-            paragraph = list(map(clean_text,paragraph))
+        captions = list(map(clean_text,captions))
+        contexts = list(map(clean_text,contexts))
+        paragraphs = list(map(clean_text,paragraphs))
 
-            contexts = [(c,generate_nostop_unigrams(c)) for c in contexts] #(context, unigram)의 tuple
-            contexts = [c for _,c in contexts if 15<=len(c)<=150] #context 길이 필터링
+        contexts = [(c,generate_nostop_unigrams(c)) for c in contexts] #(context, unigram)의 tuple
+        contexts = [c for c in contexts if 15<=len(c[1])<=150] #context 길이 필터링
 
-            new_rows = extract_pairs(title, paragraph, imgs, captions, contexts, page_num)
-            csv_dataset.append(new_rows ,ignore_index=True)
-        else : 
-            continue
+        new_rows = extract_pairs(title, paragraphs, imgs, captions, contexts, page_num)
+        print(title, new_rows)
+        for row in new_rows:
+            added += 1 
+            csv_dataset.append(row ,ignore_index=True)
 
-    csv_save_path = args.save + '/' + args.fname
-
-    if bool(new_rows) : 
-        csv_dataset.to_csv(csv_save_path, index=True)
-        print(f"{[page_num]}. {title} saved")
-        return csv_dataset
-    else : 
-        return csv_dataset
+    if added:
+        csv_dataset.to_csv(SAVEPATH, index=True)
+        print(f"{[page_num]}:{title} saved")
 
 
 def get_next_page(url) : 
@@ -397,7 +381,7 @@ def main():
       "--save",
       type=str,
       default= "/mnt/nas2/seungil/dataset/result",
-      help="where will you save the csv dataset?"
+      help="where to save the crawled dataset?"
     )
     parser.add_argument(
       "--load_csv",
@@ -424,7 +408,12 @@ def main():
     )
     args = parser.parse_args()
     
-    pool = Pool(12) #Multiprocessing with 10 cores
+    global SAVEPATH 
+    SAVEPATH = args.save + '/' + args.fname
+
+    start = datetime.datetime.now()
+    print ("Start: ",start.strftime("%Y-%m-%d %H:%M:%S"))
+    # pool = Pool(12) #Multiprocessing with 10 cores
 
     if args.load_csv : 
       csv_dataset = pd.read_csv(args.load_csv, delimiter = ',', quotechar = '"', sep='\t')  #, engine = 'python'
@@ -491,11 +480,11 @@ def main():
             print("Let's crawl them!") 
 
             # Single Processing
-            # for num in range(start_page,len(iter_pages)): crawl(args,iter_pages,csv_dataset,num)
+            for num in range(start_page,len(iter_pages)): crawl(args,iter_pages,csv_dataset,num)
 
             # Multi Processing
-            arguments = zip(repeat(args),repeat(iter_pages),repeat(csv_dataset),range(start_page,len(iter_pages)))
-            pool.starmap(crawl,arguments)
+            # arguments = zip(repeat(args),repeat(iter_pages),repeat(csv_dataset),range(start_page,len(iter_pages)))
+            # pool.starmap(crawl,arguments)
 
             count += 1
             print(f"{count}-th list in total is done!") 
@@ -514,6 +503,9 @@ def main():
         pool.starmap(crawl,arguments)
 
         print(f"All {args.quality} pages are crawled!!!")
+
+    end = datetime.datetime.now()
+    print("Elapsed Time:", end-start)
 
 if __name__ == "__main__":
     main()
