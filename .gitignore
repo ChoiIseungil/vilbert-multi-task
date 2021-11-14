@@ -52,3 +52,4 @@ ENV/
 dataset/
 pretrained_model.bin
 *.pkl
+*.csv

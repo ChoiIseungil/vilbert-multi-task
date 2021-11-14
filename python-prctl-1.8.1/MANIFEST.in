@@ -1,4 +1,0 @@
-include securebits.h
-include test_prctl.py
-include docs/*
-include MANIFEST.in

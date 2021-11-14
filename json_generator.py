@@ -7,34 +7,51 @@ import pandas as pd
 import jsonlines as jsonlines
 import argparse
 
-DATAPATH = "/mnt/nas2/seungil/result_legacy/"
+import re 
+
+
+CSVPATH = "/mnt/nas2/seungil/result_legacy/"
 SAVEPATH = "/mnt/nas2/seungil/jsonlines/"
 FEATUREPATH = "/mnt/nas2/seungil/old_dataset/"
  
 
 def write_json(fname):
-    df = pd.read_csv(DATAPATH+fname+'.csv')
+    df = pd.read_csv(CSVPATH+fname+'.csv')
+
     # df = df[['image url', column]].groupby('image url')[column].apply(list).reset_index(name = column)
-    df.drop_duplicates(subset=['image url'], inplace=True)
+    # df.duplicated(['image url'])
+    # df.drop_duplicates(subset=['image url'], inplace=True)
 
     flist = []
     success, fail = 0,0
-    for i, row in df.iterrows():
-        temp = {}
-        temp['image_id'] = row['title'].replace(".","") + '_' + str(i)
-        temp['caption'] = row['caption']
-        temp['context'] = row['title'] + " " + row['paragraph'] + " " + row['contexts'] #concatenate
-        if os.path.exists(FEATUREPATH + fname + '_features/' + temp['image_id'] + '.npy'): 
+
+    feature_dir = os.listdir(FEATUREPATH + fname + '_features/')
+
+    for item in feature_dir : 
+        feature_name = item.split('.npy')[0]
+        title = re.sub(r'_[0-9]+','',feature_name)
+        index = int(feature_name.split('_')[-1])
+
+        if df.iloc[index]['title'].replace(".","") == title : 
+            temp = {}
+            temp['image_id'] = feature_name 
+            temp['caption'] = df.iloc[index]['caption']
+            temp['context'] = df.iloc[index]['contexts']
             flist.append(temp)
-            success += 1
-        else: 
-            fail += 1
-            continue
+            success +=1 
 
-    print(f"{success} lines generated, {fail} files doesn't exist")
+        else : 
+            fail +=1
+            print("error sample : ", item)
 
+    # print(f"flist0 : {flist[0]}")
+            
     with jsonlines.open(SAVEPATH + fname + '.jsonline', 'w') as writer:
         writer.write_all(flist)
+    
+    print(f"N of features : {len(feature_dir)}")
+    print(f"N of csv row : {len(df)}")
+    print(f"success : {success}\nfail : {fail}")
 
 def main():
     parser = argparse.ArgumentParser()
@@ -47,7 +64,6 @@ def main():
     )
 
     args = parser.parse_args()
-    
     write_json(args.fname)
 
 if __name__ == "__main__":

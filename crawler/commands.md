@@ -19,4 +19,3 @@ conda activate seungil
 	python crawler/crawler.py --fname AA7.csv --aa_pkl 7
 	python crawler/crawler.py --fname AA8.csv --aa_pkl 8
 	python crawler/crawler.py --fname AA9.csv --aa_pkl 9
-
