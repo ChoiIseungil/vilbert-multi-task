@@ -85,7 +85,6 @@ def generate_nostop_unigrams(s):
     # Break sentence in the token, remove empty tokens
     tokens = [token for token in s.split(" ") if token != "" and len(token)!=1]
     tokens = list(set(tokens))
-
     return tokens
 
 
@@ -115,7 +114,6 @@ def computeTF(wordDict, bow): #각 문단에서 캡션과 겹치는 단어가 �
 def computeIDF(docList): # 각 문단별로 캡션에 있는 단어가 존재하는지 보는 1 or 0의 wordDict들 
     idfDict = {}
     N = len(docList)
-    
     idfDict = dict.fromkeys(docList[0].keys(), 0) # 캡션에 존재하는 단어에 대한 Dict 
     for doc in docList:
         for word, val in doc.items():
@@ -141,37 +139,37 @@ def areSubString(captionSet: set, contextSet: set)-> bool:
     return True
 
 
-def extract_pairs(title, paragraph, imgs, captions, contexts, csv_dataset, page_num) :
+def extract_pairs(title, paragraph, imgs, captions, contexts, page_num):
+    new_rows = []
     for img, caption in zip(imgs, captions) : 
         if not (img and caption) : break # img caption pair 가 True가 아닐 때 
         caption_ner = my_ner(caption) 
 
         if not caption_ner: break # NE>1 이면
-        contexts = [c for c in contexts if areSubString(caption_ner,my_ner(c))]
-        unigram_contexts = [generate_nostop_unigrams(c) for c in contexts]
-        unigram_contexts = [c for c in unigram_contexts if 15<=len(c)<=150] #context 길이 필터링
+        valid_contexts = [(c,u) for (c,u) in contexts if areSubString(caption_ner,my_ner(c))]
 
         # unigram caption 
         uni_cap = generate_nostop_unigrams(clean_text(caption))
 
         if len(uni_cap) < 5: break # caption 의 unigram size가 minimum 을 넘지 못할 때 
-        capSet = set(uni_cap)   
+
+        capSet = set(uni_cap) 
+
         contexts_TF_list = []
-        for id in range(len(unigram_contexts)):
+        for id in range(len(valid_contexts)):
             contexts_TF_list.append(dict.fromkeys(capSet, 0))
-            if unigram_contexts[id]:
-                for word in unigram_contexts[id]:
-                    if contexts_TF_list[id].get(word) is not None  : contexts_TF_list[id][word] +=1  
+            for word in valid_contexts[id][1]:
+                if contexts_TF_list[id].get(word) is not None: contexts_TF_list[id][word] +=1  
+
+        assert(len(contexts_TF_list)==len(valid_contexts))
 
         computed_TF = [] # 각 문단별로 Term frequency 구하는 과정
-        for tf, unigram_context in zip(contexts_TF_list, unigram_contexts):
+        for tf, (_, unigram_context) in zip(contexts_TF_list, valid_contexts):
             computed_TF.append(computeTF(tf, unigram_context))
 
         idf_score = computeIDF(contexts_TF_list) # 그 소문단에 대한 IDF 계산 
 
-        TFIDF_list = [] # 각 문단 별로 TFIDF 가 계산된 list
-        for tf in computed_TF : 
-            TFIDF_list.append(computeTFIDF(tf, idf_score))
+        TFIDF_list = [computeTFIDF(tf, idf_score) for tf in computed_TF]
 
         max_id, max_score = -1, 0 
         for id, tfidf in enumerate(TFIDF_list) : 
@@ -182,13 +180,13 @@ def extract_pairs(title, paragraph, imgs, captions, contexts, csv_dataset, page_
                 max_score = score 
                 max_id = id 
 
-        related_context_NER = my_ner(contexts[max_id])
+        if max_id == -1:  continue  #all negative weights
 
-        if max_id == -1:  continue
+        related_context_NER = my_ner(contexts[max_id])
             
         info_dict = {}
         info_dict["title"] = title
-        info_dict["paragraph"] = clean_text(paragraph)
+        info_dict["paragraph"] = paragraph
         info_dict["caption"] = caption
         info_dict["contexts"] = contexts[max_id]
         info_dict["image url"] = img['src']
@@ -196,14 +194,14 @@ def extract_pairs(title, paragraph, imgs, captions, contexts, csv_dataset, page_
 
         # info_dict["caption unigram"] = uni_cap
         # info_dict["context unigram"] = unigram_contexts[max_id] 
+        # info_dict["TFIDF"] = TFIDF_list[max_id]
+
         info_dict["caption NER"] = caption_ner 
         info_dict["context NER"] = related_context_NER
-        info_dict["TFIDF"] = TFIDF_list[max_id]
         info_dict["TFIDF score"] = max_score 
+        new_rows.append(info_dict)
 
-        csv_dataset = csv_dataset.append(info_dict, ignore_index=True)
-
-    return csv_dataset
+    return new_rows
 
 
 def get_partial_pairs(href) : 
@@ -244,22 +242,27 @@ def get_data_from_page(args, page, csv_dataset, page_num):
     updated_csv_dataset = pd.DataFrame()
 
     whole_pairs = get_partial_pairs(href) 
-    for th_para, (imgs, captions, contexts, paragraph) in enumerate(whole_pairs) : 
+    for _, (imgs, captions, contexts, paragraph) in enumerate(whole_pairs) : 
 
         if imgs and captions and contexts:
             captions = list(map(clean_text,captions))
             contexts = list(map(clean_text,contexts))
-            updated_csv_dataset = extract_pairs(title, paragraph, imgs, captions, contexts, csv_dataset, page_num)
-            print(updated_csv_dataset)
+            paragraph = list(map(clean_text,paragraph))
+
+            contexts = [(c,generate_nostop_unigrams(c)) for c in contexts] #(context, unigram)의 tuple
+            contexts = [c for _,c in contexts if 15<=len(c)<=150] #context 길이 필터링
+
+            new_rows = extract_pairs(title, paragraph, imgs, captions, contexts, page_num)
+            csv_dataset.append(new_rows ,ignore_index=True)
         else : 
             continue
 
     csv_save_path = args.save + '/' + args.fname
 
-    if len(updated_csv_dataset)!= 0 : 
-        updated_csv_dataset.to_csv(csv_save_path, index=True)
+    if bool(new_rows) : 
+        csv_dataset.to_csv(csv_save_path, index=True)
         print(f"{[page_num]}. {title} saved")
-        return updated_csv_dataset
+        return csv_dataset
     else : 
         return csv_dataset
 
@@ -371,8 +374,9 @@ def get_all_articles(url) :
     return all_lists
 
 def crawl(args,iter_pages,csv_dataset,num):
-    try : get_data_from_page(args, iter_pages[num], csv_dataset, num)
-    except Exception as e : print(f"Error: {e} In : {iter_pages[num]}")
+    get_data_from_page(args, iter_pages[num], csv_dataset, num)
+    # try : get_data_from_page(args, iter_pages[num], csv_dataset, num)
+    # except Exception as e : print(f"Error: {e}, In : {iter_pages[num]}")
 
 def main():
     parser = argparse.ArgumentParser()
