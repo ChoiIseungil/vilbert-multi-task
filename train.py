@@ -11,7 +11,7 @@ from sgr_utils import *
 from nltk.translate.bleu_score import corpus_bleu
 
 # Data parameters
-data_folder = '/content/gdrive/Shareddrives/2021-KAIRI/FA_dataset/'  # folder with data files saved by create_input_files.py
+PATH = '/mnt/nas2/seungil'  # folder with data files saved by create_input_files.py
 data_name = 'FA_dataset'  # base name shared by data files
 
 # Model parameters
@@ -36,8 +36,6 @@ best_bleu4 = 0.  # BLEU-4 score right now
 print_freq = 100  # print training/validation stats every __ batches
 fine_tune_encoder = False  # fine-tune encoder?
 checkpoint = "BEST_checkpoint_FA_dataset.pth.tar" 
-# checkpoint = "checkpoint_FA_dataset.pth.tar"
-# checkpoint = None # OR "checkpoint_FA_dataset.pth.tar" #None  # path to checkpoint, None if none #1.66GB ?
 from_checkpoint_encoder = False 
 from_checkpoint_decoder = False
 
@@ -52,14 +50,11 @@ from pytorch_transformers.modeling_bert import BertModel
 # it is from demo.py 
 # its purpose is tokenizing a custom input data 
 # here's no need 
-
-
-
 # encoder = model
 ##########################
 
 def main():
-    
+
     """
     From ViLBERT
     
@@ -194,10 +189,10 @@ def main():
     train_loader = torch.utils.data.DataLoader(
         ContextCaptionDataset(
             task,
-            dataroot=data_folder,
-            annotations_jsonpath=data_folder+'FA.jsonline',
+            dataroot=PATH,
+            annotations_jsonpath=PATH+'FA.jsonline',
             split='train',
-            features_h5path1 = data_folder+'FA.lmdb', # image_features_reader=data_folder+'FA.lmdb',
+            features_h5path1 = PATH+'FA.lmdb', # image_features_reader=PATH+'FA.lmdb',
             features_h5path2 = '', #gt_image_features_reader='',
             tokenizer=tokenizer,
             bert_model=args.bert_model,
@@ -206,10 +201,10 @@ def main():
     val_loader = torch.utils.data.DataLoader(
         ContextCaptionDataset(
             task,
-            dataroot=data_folder,
-            annotations_jsonpath=data_folder+'FA.jsonline',
+            dataroot=PATH,
+            annotations_jsonpath=PATH+'FA.jsonline',
             split='val',
-            features_h5path1 = data_folder+'FA.lmdb', # image_features_reader=data_folder+'FA.lmdb',
+            features_h5path1 = PATH+'FA.lmdb', # image_features_reader=PATH+'FA.lmdb',
             features_h5path2 = '', #gt_image_features_reader='',
             tokenizer=tokenizer,
             bert_model=args.bert_model,
