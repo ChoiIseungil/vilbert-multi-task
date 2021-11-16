@@ -1,3 +1,6 @@
+# docker attach kairi_nvidia
+# conda activate vilbert-mt
+
 import time
 import torch.backends.cudnn as cudnn
 import torch.optim
@@ -6,12 +9,13 @@ import torchvision.transforms as transforms
 from torch import nn
 from torch.nn.utils.rnn import pack_padded_sequence
 from sgr_models import Encoder, DecoderWithAttention, DecoderWithBertEmbedding
-from sgr_datasets import *
-from sgr_utils import *
+import logging
+from datasets import *
+from utils import *
 from nltk.translate.bleu_score import corpus_bleu
 
 # Data parameters
-PATH = '/mnt/nas2/seungil'  # folder with data files saved by create_input_files.py
+PATH = '/mnt/nas2/seungil/'  # folder with data files saved by create_input_files.py
 data_name = 'FA_dataset'  # base name shared by data files
 
 # Model parameters
@@ -35,9 +39,9 @@ alpha_c = 1.  # regularization parameter for 'doubly stochastic attention', as i
 best_bleu4 = 0.  # BLEU-4 score right now
 print_freq = 100  # print training/validation stats every __ batches
 fine_tune_encoder = False  # fine-tune encoder?
-checkpoint = "BEST_checkpoint_FA_dataset.pth.tar" 
-from_checkpoint_encoder = False 
-from_checkpoint_decoder = False
+checkpoint = None #"BEST_checkpoint_FA_dataset.pth.tar" 
+
+
 
 ##########################
 """ vilbert module """
@@ -53,6 +57,13 @@ from pytorch_transformers.modeling_bert import BertModel
 # encoder = model
 ##########################
 
+logging.basicConfig(
+    format="%(asctime)s - %(levelname)s - %(name)s -   %(message)s",
+    datefmt="%m/%d/%Y %H:%M:%S",
+    level=logging.INFO,
+)
+logger = logging.getLogger(__name__)
+
 def main():
 
     """
@@ -60,7 +71,7 @@ def main():
     
     """
     
-    args = SimpleNamespace(from_pretrained= "pretrained_model.bin", #"save/multitask_model/pytorch_model_9.bin",
+    args = SimpleNamespace(from_pretrained= "/mnt/nas2/seungil/pretrained_model.bin",
                        bert_model="bert-base-uncased",
                        config_file="config/bert_base_6layer_6conect.json",
                        max_seq_length=101,
@@ -190,7 +201,7 @@ def main():
         ContextCaptionDataset(
             task,
             dataroot=PATH,
-            annotations_jsonpath=PATH+'FA.jsonline',
+            annotations_jsonpath=PATH+'jsonlines/FA.jsonline',
             split='train',
             features_h5path1 = PATH+'FA.lmdb', # image_features_reader=PATH+'FA.lmdb',
             features_h5path2 = '', #gt_image_features_reader='',
