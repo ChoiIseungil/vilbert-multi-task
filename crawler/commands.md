@@ -3,8 +3,8 @@ AA
 conda activate seungil
 
 1) all_pages_for_a_partial_list pkl
-	python crawler/crawler.py --fname AA0.csv --all_pages_pkl 0 --load_csv /mnt/nas2/seungil/dataset/result/AA0.csv
-	python crawler/crawler.py --fname AA1.csv --all_pages_pkl 1 --load_csv /mnt/nas2/seungil/dataset/result/AA1.csv
+	python crawler/crawler.py --fname AA0.csv --all_pages_pkl 0 --load_csv /mnt/nas2/seungil/crawling/result/AA0.csv
+	python crawler/crawler.py --fname AA1.csv --all_pages_pkl 1 --load_csv /mnt/nas2/seungil/crawling/result/AA1.csv
 	
 
 2) partial_page pkl 활용할 경우 

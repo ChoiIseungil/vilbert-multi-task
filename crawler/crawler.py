@@ -33,7 +33,7 @@ Stemmer = nltk.stem.SnowballStemmer('english')
 STOPS = set(stopwords.words('english'))
 STOPS.add("")
 
-SAVEPATH = "/mnt/nas2/seungil/dataset/result"
+SAVEPATH = "/mnt/nas2/seungil/crawling/result"
 
 
 def clean_parenthesis(data : "str"):
@@ -380,7 +380,7 @@ def main():
     parser.add_argument(
       "--save",
       type=str,
-      default= "/mnt/nas2/seungil/dataset/result",
+      default= "/mnt/nas2/seungil/dataset/crawling",
       help="where to save the crawled dataset?"
     )
     parser.add_argument(
@@ -427,7 +427,7 @@ def main():
         total_parts_list = []
 
         if args.aa_pkl is not None :
-            pkl_name = "/mnt/nas2/seungil/dataset/pages/partial_list_" + args.aa_pkl + ".pkl"
+            pkl_name = "/mnt/nas2/seungil/crawling/pages/partial_list_" + args.aa_pkl + ".pkl"
             with open(pkl_name, 'rb') as f : 
                 a_list = pickle.load(f)
             total_parts_list.append(a_list)
@@ -435,7 +435,7 @@ def main():
             print("a pkl length : ",len(total_parts_list[0]))
 
         elif args.all_pages_pkl is not None :
-            pkl_name = "/mnt/nas2/seungil/dataset/all_pages/all_pages_for_partial_list" + args.all_pages_pkl + ".pkl"
+            pkl_name = "/mnt/nas2/seungil/crawling/all_pages/all_pages_for_partial_list" + args.all_pages_pkl + ".pkl"
             with open(pkl_name, 'rb') as f : 
                 all_pages = pickle.load(f) 
             total_parts_list.append(all_pages)

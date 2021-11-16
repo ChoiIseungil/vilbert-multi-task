@@ -16,7 +16,7 @@ from nltk.translate.bleu_score import corpus_bleu
 
 # Data parameters
 PATH = '/mnt/nas2/seungil/'  # folder with data files saved by create_input_files.py
-data_name = 'FA_dataset'  # base name shared by data files
+data_name = 'FA'  # base name shared by data files
 
 # Model parameters
 emb_dim = 512  # dimension of word embeddings
@@ -203,7 +203,7 @@ def main():
             dataroot=PATH,
             annotations_jsonpath=PATH+'jsonlines/FA.jsonline',
             split='train',
-            features_h5path1 = PATH+'FA.lmdb', # image_features_reader=PATH+'FA.lmdb',
+            features_h5path1 = PATH+'lmdbs/FA.lmdb', # image_features_reader=PATH+'FA.lmdb',
             features_h5path2 = '', #gt_image_features_reader='',
             tokenizer=tokenizer,
             bert_model=args.bert_model,
@@ -213,9 +213,9 @@ def main():
         ContextCaptionDataset(
             task,
             dataroot=PATH,
-            annotations_jsonpath=PATH+'FA.jsonline',
+            annotations_jsonpath=PATH+'jsonlines/FA.jsonline',
             split='val',
-            features_h5path1 = PATH+'FA.lmdb', # image_features_reader=PATH+'FA.lmdb',
+            features_h5path1 = PATH+'lmdbs/FA.lmdb', # image_features_reader=PATH+'FA.lmdb',
             features_h5path2 = '', #gt_image_features_reader='',
             tokenizer=tokenizer,
             bert_model=args.bert_model,

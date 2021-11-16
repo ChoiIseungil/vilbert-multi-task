@@ -337,11 +337,11 @@ TASK19:
   loss: CrossEntropyLoss
   process: normal
   task_id: 19
-  dataroot: datasets/FA_dataset/
-  features_h5path1: datasets/FA_dataset/FA_lmdb.lmdb
+  dataroot: /mnt/nas2/seungil
+  features_h5path1: /mnt/nas2/seungil/lmdbs/FA.lmdb
   features_h5path2: ''
-  train_annotations_jsonpath: 'datasets/FA_dataset/FA_train.json'
-  val_annotations_jsonpath: 'datasets/FA_dataset/FA_test.json'
+  train_annotations_jsonpath: '/mnt/nas2/seungil/jsonlines/FA.jsonline'
+  val_annotations_jsonpath: '/mnt/nas2/seungil/jsonlines/FA.jsonline'
   max_seq_length: 256
   max_region_num: 101
   batch_size: 8
