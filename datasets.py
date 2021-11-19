@@ -40,11 +40,13 @@ def assert_eq(real, expected):
 def _load_annotations(annotations_jsonpath):
     """Build an index out of FOIL annotations, mapping each image ID with its corresponding captions."""
 
-    annotations_json = json.load(open(annotations_jsonpath))
+    annotations_json = []
+    for line in open(annotations_jsonpath): annotations_json.append(json.loads(line))
+    # annotations_json = json.load(open(annotations_jsonpath,encoding = "utf-8"))
 
     # Build an index which maps image id with a list of caption annotations.
     entries = []
-    print(f"# # # # annotations_json # # # # \n{annotations_json}")
+    # print(f"# # # # annotations_json # # # # \n{annotations_json}")
 
     for annotation in annotations_json: #annotations
         # print(f"# # # # WTF annotation : {annotation}")

@@ -49,7 +49,6 @@ venv/
 ENV/
 
 #Large file
-dataset/
 pretrained_model.bin
 *.pkl
 *.csv
