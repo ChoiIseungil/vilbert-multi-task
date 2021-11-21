@@ -1,6 +1,8 @@
 # docker attach kairi_nvidia
 # conda activate vilbert-mt
 
+import argparse
+import logging
 import time
 import torch.backends.cudnn as cudnn
 import torch.optim
@@ -13,6 +15,13 @@ import logging
 from datasets import *
 from utils import *
 from nltk.translate.bleu_score import corpus_bleu
+
+logging.basicConfig(
+    format="%(asctime)s - %(levelname)s - %(name)s -   %(message)s",
+    datefmt="%m/%d/%Y %H:%M:%S",
+    level=logging.INFO,
+)
+logger = logging.getLogger(__name__)
 
 # Data parameters
 PATH = '/mnt/nas2/seungil/'  # folder with data files saved by create_input_files.py
@@ -65,7 +74,11 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 def main():
+    parser = argparse.ArgumentParser()
 
+    parser.add_argument(
+        "--seed", type=int, default=42, help="random seed for initialization"
+    )
     """
     From ViLBERT
     
@@ -146,7 +159,20 @@ def main():
     #model.eval
     cuda = torch.cuda.is_available()
     if cuda: encoder = encoder.cuda(0)
+    n_gpu = torch.cuda.device_count()
+
+    logger.info(
+        "device: {} n_gpu: {}".format(
+            device, n_gpu
+        )
+    )
     
+    random.seed(args.seed)
+    np.random.seed(args.seed)
+    torch.manual_seed(args.seed)
+
+    if n_gpu>0:
+        torch.cuda.manual_seed_all(args.seed)
     # Load pre-trained model tokenizer (vocabulary)
     tokenizer = BertTokenizer.from_pretrained(
     args.bert_model, do_lower_case=args.do_lower_case
@@ -190,6 +216,9 @@ def main():
     # Move to GPU, if available
     decoder = decoder.to(device)
     encoder = encoder.to(device)
+    if n_gpu>1:
+        # encoder = torch.nn.DataParallel(encoder)
+        decoder = torch.nn.DataParallel.to(decoder)
 
     # Loss function
     criterion = nn.CrossEntropyLoss().to(device)
@@ -222,17 +251,16 @@ def main():
             ),
         batch_size=batch_size, shuffle=True, num_workers=workers, pin_memory=True)
 
-    print("*****Total Number of Parameters*****")
-    print("Encoder #",count_parameters(encoder))
-    print("Decoder #",count_parameters(decoder))
-    print()
+    logger.info("***** Running training *****")
+    logger.info("  Batch size = %d", batch_size)
+    logger.info("  Num steps = %d", epochs)
+
+    logger.info("*****Total Number of Parameters*****")
+    logger.info("   Encoder # = %d", count_parameters(encoder))
+    logger.info("   Decoder # = %d", count_parameters(decoder))
 
     # Epochs
     for epoch in range(start_epoch, epochs):
-
-        # Decay learning rate if there is no improvement for 8 consecutive epochs, and terminate training after 20
-        # if epochs_since_improvement == 40:
-        #     break
         if epochs_since_improvement > 0 and epochs_since_improvement % 8 == 0:
             adjust_learning_rate(decoder_optimizer, 0.8)
             if fine_tune_encoder:
