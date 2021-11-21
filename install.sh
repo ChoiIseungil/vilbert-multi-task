@@ -29,12 +29,6 @@ git clone https://github.com/cocodataset/cocoapi.git
 cd cocoapi/PythonAPI
 python setup.py build_ext install
 
-cd /home/vilbert-multi-task
-git clone https://github.com/mcordts/cityscapesScripts.git
-cd cityscapesScripts
-python setup.py build_ext install
-cd .. 
-
 #apex?
 
 cd /home/vilbert-multi-task

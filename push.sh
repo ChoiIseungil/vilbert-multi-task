@@ -6,5 +6,5 @@ git add -u
 git commit -m "pushed from EGG kairi_nvidia, by seungil"
 
 # git push https://ChoiIseungil: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@github.com/ChoiIseungil/vilbert-multi-task.git -u origin master --recurse-submodules=on-demand
-git push -u origin master --recurse-submodules=on-demand
+git push origin master --recurse-submodules=on-demand
 # git push -u origin jsongenerator --recurse-submodules=on-demand
