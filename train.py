@@ -525,8 +525,8 @@ def validate(val_loader, encoder, decoder, criterion, tokenizer):
                 loss_avg=float(losses.avg),
                 top5_avg=float(top5accs.avg),
                 bleu=bleu4))
-        print(f"references : {references}")
-        print(f"hypotheses : {hypotheses}")
+        # print(f"references : {references}")
+        # print(f"hypotheses : {hypotheses}")
 
     return bleu4
 

@@ -95,8 +95,9 @@ class FeatureExtractor:
         return model
 
     def _image_transform(self, path): #each row
-        print(f"_image_transform : path parameter check : {path}")
-        image_url = "https:" + path['image url']    
+        # print(f"_image_transform : path parameter check : {path}")
+        image_url = "https:" + path['image url'] 
+        print("image url: ",image_url)
         with urlopen(image_url) as f : 
             image_bytes = f.read()
         encoded_img = np.fromstring(image_bytes, dtype = np.uint8)
@@ -191,8 +192,13 @@ class FeatureExtractor:
     def get_detectron_features(self, image_paths): # some rows are input
         img_tensor, im_scales, im_infos = [], [], []
 
-        for image_path in image_paths: # image_path is each row
-            im, im_scale, im_info = self._image_transform(image_path) # each row 
+        # print(f"image paths (input of get detectron features) : {image_paths}")
+
+        # for image_path in image_paths: # image_path is each row
+
+        for df_index, row in image_paths.iterrows():
+            print(f"idx: {df_index}\ttitle: {row['title']}")
+            im, im_scale, im_info = self._image_transform(row) # each row 
             img_tensor.append(im)
             im_scales.append(im_scale)
             im_infos.append(im_info)
@@ -228,6 +234,7 @@ class FeatureExtractor:
         file_base_name = file_base_name + ".npy"
 
         np.save(os.path.join(self.args.output_folder, file_base_name), info)
+        print(f"{file_base_name} is saved")
 
     def extract_features(self):
         image_dir = self.args.image_dir
@@ -243,8 +250,9 @@ class FeatureExtractor:
             for chunk in self._chunks(image_df, self.args.batch_size): # chunk is some rows in df
                 try : 
                     features, infos = self.get_detectron_features(chunk) # some rows will be input data
-                    for idx, file_name in enumerate(chunk): # idx have to be matched with ,,, row index 
-                        self._save_feature(file_name, features[idx], infos[idx])
+                    for i, (df_idx, row) in enumerate(chunk.iterrows()): # idx have to be matched with ,,, row index 
+                        file_name = row['title'] + '_' + str(df_idx)
+                        self._save_feature(file_name, features[i], infos[i])
                 except Exception as e : 
                     print(f"error : {e}")
                     continue 
@@ -266,5 +274,5 @@ if __name__ == "__main__":
     feature_extractor.extract_features()
 
 """
-python script/__extract_features.py --model_file data/detectron_model.pth --config_file data/detectron_config.yaml --image_dir ../../mnt/nas2/seungil/result_legacy/AA6.csv --output_folder ../../mnt/nas2/seungil/old_dataset/AA6_features/ --batch_size 4 --gpu_num 0
+python script/__extract_features.py --model_file data/detectron_model.pth --config_file data/detectron_config.yaml --image_dir ../../mnt/nas2/seungil/legacy/AA6.csv --output_folder ../../mnt/nas2/seungil/features/AA6_features/ --batch_size 4 --gpu_num 0
 """
