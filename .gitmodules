@@ -1,6 +1,9 @@
 [submodule "tools/refer"]
 	path = tools/refer
 	url = https://github.com/lichengunc/refer.git
-[submodule "refer"]
-	path = refer
-	url = https://github.com/lichengunc/refer
+[submodule "apex"]
+	path = apex
+	url = https://github.com/NVIDIA/apex.git
+[submodule "vqa-maskrcnn-benchmark"]
+	path = vqa-maskrcnn-benchmark
+	url = https://gitlab.com/vedanuj/vqa-maskrcnn-benchmark.git
