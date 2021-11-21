@@ -7,3 +7,7 @@
 [submodule "vqa-maskrcnn-benchmark"]
 	path = vqa-maskrcnn-benchmark
 	url = https://gitlab.com/vedanuj/vqa-maskrcnn-benchmark.git
+[submodule "vqa-maskrcnn-benchmark/cocoapi"]
+	path = vqa-maskrcnn-benchmark/cocoapi
+	url = https://github.com/cocodataset/cocoapi.git
+
