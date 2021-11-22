@@ -8,7 +8,6 @@ import time
 import torch.backends.cudnn as cudnn
 import torch.optim
 import torch.utils.data
-import torchvision.transforms as transforms
 from torch import nn
 from torch.nn.utils.rnn import pack_padded_sequence
 from sgr_models import Encoder, DecoderWithAttention, DecoderWithBertEmbedding #TODO: sgr_models -> models.py 로 바꿔서 train하기
@@ -54,8 +53,6 @@ checkpoint = None #"BEST_checkpoint_FA_dataset.pth.tar"
 ##########################
 """ vilbert module """
 from types import SimpleNamespace
-from easydict import EasyDict as edict
-import yaml
 
 from pytorch_transformers.tokenization_bert import BertTokenizer
 from pytorch_transformers.modeling_bert import BertModel
@@ -421,7 +418,7 @@ def validate(val_loader, encoder, decoder, criterion, tokenizer):
 
     start = time.time()
     
-    test_references = list()
+    test_references = list() #TODO: 안씀
     references = list()  # references (true captions) for calculating BLEU-4 score
     hypothesis = list()  # hypothesis (predictions)
 
@@ -518,7 +515,6 @@ def validate(val_loader, encoder, decoder, criterion, tokenizer):
             preds_token = []
             for l in preds : 
                 preds_token.append(tokenizer.convert_ids_to_tokens(l))
-            temp_preds = list()
             
             for j, p in enumerate(preds_token):
                 # print(f"iter : {j}, p in preds : {p}, p shape : {len(p)}")
@@ -526,9 +522,7 @@ def validate(val_loader, encoder, decoder, criterion, tokenizer):
                 # pred = p[:decode_lengths[j]] # decode_lenths is from decoder's 3rd output, like ... 29? 30? 
                 pred = p[:decode_lengths[j]]
                 pred = [w for w in pred if w not in ["[PAD]", "[CLS]","[SEP]"]]
-                temp_preds.append(pred)  # remove pads, start, and end
-            preds = temp_preds
-            hypothesis.extend(preds)
+                hypothesis.append(pred)  # remove pads, start, and end
 
             assert len(references) == len(hypothesis)
         

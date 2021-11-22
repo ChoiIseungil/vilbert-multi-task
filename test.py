@@ -1,7 +1,6 @@
 # Written by Seungil Lee, Nov 22, 2021
 # docker attach kairi_nvidia
 # conda activate train
-
 import random
 import numpy as np
 import argparse
@@ -10,7 +9,6 @@ import time
 import torch.backends.cudnn as cudnn
 import torch.optim
 import torch.utils.data
-import torchvision.transforms as transforms
 from torch import nn
 from torch.nn.utils.rnn import pack_padded_sequence
 import logging
@@ -22,9 +20,7 @@ import os
 os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
-# Data parameters
 PATH = '/mnt/nas2/seungil/'  # folder with data files saved by create_input_files.py
-data_name = 'FA'  # base name shared by data files
 
 # Model parameters
 emb_dim = 512  # dimension of word embeddings
@@ -36,16 +32,11 @@ cudnn.benchmark = True  # set to true only if inputs to model are fixed size; ot
 # Training parameters
 workers = 1  # for data-loading; right now, only 1 works with h5py
 print_freq = 100  # print training/validation stats every __ batches
-checkpoint = "BEST_checkpoint_FA.pth.tar" #1.66GB 
 from_checkpoint_encoder = False 
 from_checkpoint_decoder = False
 
 ##########################
 """ vilbert module """
-from types import SimpleNamespace
-from easydict import EasyDict as edict
-import yaml
-
 from pytorch_transformers.tokenization_bert import BertTokenizer
 from pytorch_transformers.modeling_bert import BertModel
 # it is from demo.py 
@@ -65,10 +56,23 @@ def main():
     parser = argparse.ArgumentParser()
 
     parser.add_argument(
-        "--message", type=str, required=True, help="provide some detailed description of this test please"
+        "-m", 
+        type=str, 
+        required=True, 
+        help="provide some detailed description of this test please"
     )
     parser.add_argument(
-        "--seed", type=int, default=42, help="random seed for initialization"
+        "-d",
+        required = True,
+        default = "FA", #1.66GB
+        type = str,
+        help = "test data"
+    )
+    parser.add_argument(
+        "--seed", 
+        type=int, 
+        default=42, 
+        help="random seed for initialization"
     )
     parser.add_argument(
         "--batch_size",
@@ -76,38 +80,40 @@ def main():
         type=int,
         help="batch_size"
     )
+    parser.add_argument(
+        "--alpha_c",
+        default = "1.0",
+        type = float,
+        help = "regularization parameter for 'doubly stochastic attention', as in the paper"
+    )
+    parser.add_argument(
+        "--bert_model",
+        default = "bert-base-uncased",
+        type = str,
+    )
+    parser.add_argument(
+        "--do_lower_case",
+        default = True,
+        type = bool,
+    )
+    parser.add_argument(
+        "--checkpoint",
+        default = "BEST_checkpoint_FA.pth.tar", #1.66GB
+        type = str,
+    )
 
-    args_ = parser.parse_args()
+    args = parser.parse_args()
+
+    global alpha_c, message, checkpoint_name, data_name
+    alpha_c = args.alpha_c
+    message = args.m
+    checkpoint_name = args.checkpoint
+    data_name = args.d
+
     
     """
     From ViLBERT
-    
     """
-    
-    args = SimpleNamespace(from_pretrained= PATH + "pretrained_model.bin",
-                       bert_model="bert-base-uncased",
-                       config_file="config/bert_base_6layer_6conect.json",
-                       max_seq_length=101,
-                       train_batch_size=1,
-                       do_lower_case=True,
-                       predict_feature=False,
-                       seed=42,
-                       num_workers=1,
-                       baseline=False,
-                       img_weight=1,
-                       distributed=False,
-                       objective=1,
-                       visual_target=0,
-                       dynamic_attention=False,
-                       task_specific_tokens=True,
-                       tasks='19',
-                       save_name='',
-                       in_memory=False,
-                       batch_size=1,
-                       local_rank=-1,
-                       split='mteval',
-                       clean_train_sets=True
-                      )
 
     random.seed(args.seed)
     np.random.seed(args.seed)
@@ -117,11 +123,9 @@ def main():
     tokenizer = BertTokenizer.from_pretrained(
         args.bert_model, do_lower_case=args.do_lower_case
     )
-
-    global checkpoint, data_name
             
-    logger.info(f"Loaded from checkpoint: {checkpoint}")
-    checkpoint = torch.load(PATH + 'checkpoints/' + checkpoint, map_location=str(device))
+    logger.info(f"Loaded from checkpoint: {checkpoint_name}")
+    checkpoint = torch.load(PATH + 'checkpoints/' + checkpoint_name, map_location=str(device))
     decoder = checkpoint['decoder']
     encoder = checkpoint['encoder']
 
@@ -149,29 +153,31 @@ def main():
     logger.info("*****Test Started*****")
     logger.info("")
 
+    criterion = nn.CrossEntropyLoss().to(device)
+
     # Custom dataloaders
     test_loader = torch.utils.data.DataLoader(
         ContextCaptionDataset(
             "TASK19",
             dataroot=PATH,
-            annotations_jsonpath=PATH+'jsonlines/FA.jsonline',
+            annotations_jsonpath=PATH+'jsonlines/' + args.d + 'FA.jsonline',
             split='val',
-            features_h5path1 = PATH+'lmdbs/FA',
+            features_h5path1 = PATH+'lmdbs/' + args.d,
             features_h5path2 = '', #gt_image_features_reader='',
             tokenizer=tokenizer,
             bert_model=args.bert_model,
             ),
-        batch_size=args_.batch_size, shuffle=True, num_workers=workers, pin_memory=True)
-
+        batch_size=args.batch_size, shuffle=True, num_workers=workers, pin_memory=True)
 
     # One epoch's validation
     test(test_loader=test_loader,
             encoder=encoder,
             decoder=decoder,
+            criterion=criterion,
             tokenizer=tokenizer)
 
                                                                 
-def test(test_loader, encoder, decoder, tokenizer):
+def test(test_loader, encoder, decoder, criterion, tokenizer):
     """
     Performs one epoch's validation.
 
@@ -242,20 +248,25 @@ def test(test_loader, encoder, decoder, tokenizer):
             
             targets_packed, _, _, _ = pack_padded_sequence(targets, decode_lengths, batch_first=True)
 
+            loss = criterion(scores_packed, targets_packed)
+
+            # Add doubly stochastic attention regularization
+            loss += alpha_c * ((1. - alphas.sum(dim=1)) ** 2).mean()
+
 
             # Keep track of metrics
+            losses.update(loss.item(), sum(decode_lengths))
             top5 = accuracy(scores_packed, targets_packed, 5)
             top5accs.update(top5, sum(decode_lengths)) 
             batch_time.update(time.time() - start)
 
             start = time.time()
 
-            if i % print_freq == 0:
-                print('Test: [{0}/{1}]\t'
-                      'Batch Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
-                      'Loss {loss_val:.4f} ({loss_avg:.4f})\t'
-                      'Top-5 Accuracy {top5_val:.3f} ({top5_avg:.3f})\t'.format(i, len(test_loader), batch_time=batch_time,
-                                                                                loss_val = float(losses.val), loss_avg = float(losses.avg), top5_val = float(top5accs.val), top5_avg=float(top5accs.avg)))    
+            print('Test: [{0}/{1}]\t'
+                    'Batch Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
+                    'Loss {loss_val:.4f} ({loss_avg:.4f})\t'
+                    'Top-5 Accuracy {top5_val:.3f} ({top5_avg:.3f})\t'.format(i, len(test_loader), batch_time=batch_time,
+                                                                            loss_val = float(losses.val), loss_avg = float(losses.avg), top5_val = float(top5accs.val), top5_avg=float(top5accs.avg)))    
             
              # References
             for j in range(targets.shape[0]): #16  #[batch size, max seq len?] == [16, 29]
@@ -269,7 +280,7 @@ def test(test_loader, encoder, decoder, tokenizer):
             
             # hypothesis
             # preds.shape torch.Size([32, 29])
-            _, preds = torch.max(scores, dim=2) ################# dim=1(changed) <- dim=2(original)
+            _, preds = torch.max(scores, dim=2)
                 # _, preds ==> values, and index respectively 
                 # "dim =1" means it extracts 928 elements from 928 * 30522. that is, criterion is dim 1 which will be shrinked
             # print(f"predicted logits : {preds}")
@@ -277,7 +288,6 @@ def test(test_loader, encoder, decoder, tokenizer):
             preds_token = []
             for l in preds : 
                 preds_token.append(tokenizer.convert_ids_to_tokens(l))
-            temp_preds = list()
             
             for j, p in enumerate(preds_token):
                 # print(f"iter : {j}, p in preds : {p}, p shape : {len(p)}")
@@ -285,24 +295,31 @@ def test(test_loader, encoder, decoder, tokenizer):
                 # pred = p[:decode_lengths[j]] # decode_lenths is from decoder's 3rd output, like ... 29? 30? 
                 pred = p[:decode_lengths[j]]
                 pred = [w for w in pred if w not in ["[PAD]", "[CLS]","[SEP]"]]
-                temp_preds.append(pred)  # remove pads, start, and end
-            preds = temp_preds
-            hypothesis.extend(preds)
+                hypothesis.append(pred)  # remove pads, start, and end
 
             assert len(references) == len(hypothesis)
         
         # Calculate BLEU-4 scores
         bleu4 = corpus_bleu(references, hypothesis)
-        
-        print(
-            '\n * LOSS - {loss_avg:.3f}, TOP-5 ACCURACY - {top5_avg:.3f}, BLEU-4 - {bleu}\n'.format(
+        stats = '\n * LOSS - {loss_avg:.3f}, TOP-5 ACCURACY - {top5_avg:.3f}, BLEU-4 - {bleu}\n'.format(
                 loss_avg=float(losses.avg),
                 top5_avg=float(top5accs.avg),
-                bleu=bleu4))
-        print(f"references : {references}")
-        print(f"hypothesis : {hypothesis}")
+                bleu=bleu4)
+        # Writing results in tests/
+        
+        f = open(PATH + 'tests/'+ checkpoint_name + 'tested on' +  data_name + '.txt','w')
+        f.write(checkpoint_name + 'tested on' +  data_name)
+        f.write(message+'\n')
+        f.write(stats)
+        
+        for r,h in zip(references,hypothesis):
+            f.write(r + '\t' + h + '\n')
+        
+        f.close()
 
-    return bleu4
+        logger.info("*****Test Done*****")
+        logger.info(stats)
+        logger.info("Results written at test folder")
 
 if __name__ == '__main__':
     main()
