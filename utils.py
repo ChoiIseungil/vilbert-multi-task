@@ -9,6 +9,8 @@ from tqdm import tqdm
 from collections import Counter
 from random import seed, choice, sample
 
+PATH = '/mnt/nas2/seungil/checkpoints/'
+
 
 def create_input_files(dataset, karpathy_json_path, image_folder, captions_per_image, min_word_freq, output_folder,
                        max_len=100):
@@ -229,10 +231,10 @@ def save_checkpoint(data_name, epoch, epochs_since_improvement, encoder, decoder
              'encoder_optimizer': encoder_optimizer,
              'decoder_optimizer': decoder_optimizer}
     filename = 'checkpoint_' + data_name + '.pth.tar'
-    torch.save(state, filename)
+    torch.save(state, PATH + filename)
     # If this checkpoint is the best so far, store a copy so it doesn't get overwritten by a worse checkpoint
     if is_best:
-        torch.save(state, 'BEST_' + filename)
+        torch.save(state, PATH + 'BEST_' + filename)
 
 
 class AverageMeter(object):
@@ -255,7 +257,9 @@ class AverageMeter(object):
         self.count += n
         self.avg = self.sum / self.count
 
-
+def count_parameters(model):
+    return sum(p.numel() for p in model.parameters() if p.requires_grad)
+    
 def adjust_learning_rate(optimizer, shrink_factor):
     """
     Shrinks learning rate by a specified factor.

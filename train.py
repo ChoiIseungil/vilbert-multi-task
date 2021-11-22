@@ -1,6 +1,7 @@
 # docker attach kairi_nvidia
-# conda activate vilbert-mt
-
+# conda activate train
+import random
+import numpy as np
 import argparse
 import logging
 import time
@@ -10,18 +11,16 @@ import torch.utils.data
 import torchvision.transforms as transforms
 from torch import nn
 from torch.nn.utils.rnn import pack_padded_sequence
-from sgr_models import Encoder, DecoderWithAttention, DecoderWithBertEmbedding
+from sgr_models import Encoder, DecoderWithAttention, DecoderWithBertEmbedding #TODO: sgr_models -> models.py 로 바꿔서 train하기
 import logging
-from datasets import *
-from utils import *
+from datasets import ContextCaptionDataset
+from utils import save_checkpoint, adjust_learning_rate, accuracy, count_parameters, clip_gradient, AverageMeter
 from nltk.translate.bleu_score import corpus_bleu
 
-logging.basicConfig(
-    format="%(asctime)s - %(levelname)s - %(name)s -   %(message)s",
-    datefmt="%m/%d/%Y %H:%M:%S",
-    level=logging.INFO,
-)
-logger = logging.getLogger(__name__)
+import os
+os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
+os.environ["CUDA_VISIBLE_DEVICES"] = "0,1,2,3,4,5,6,7"
+
 
 # Data parameters
 PATH = '/mnt/nas2/seungil/'  # folder with data files saved by create_input_files.py
@@ -79,12 +78,19 @@ def main():
     parser.add_argument(
         "--seed", type=int, default=42, help="random seed for initialization"
     )
+    parser.add_argument(
+        "--batch_size",
+        default=1,
+        type=int,
+        help="batch_size"
+    )
+    
     """
     From ViLBERT
     
     """
     
-    args = SimpleNamespace(from_pretrained= "/mnt/nas2/seungil/pretrained_model.bin",
+    args = SimpleNamespace(from_pretrained= PATH + "pretrained_model.bin",
                        bert_model="bert-base-uncased",
                        config_file="config/bert_base_6layer_6conect.json",
                        max_seq_length=101,
@@ -92,7 +98,7 @@ def main():
                        do_lower_case=True,
                        predict_feature=False,
                        seed=42,
-                       num_workers=0,
+                       num_workers=1,
                        baseline=False,
                        img_weight=1,
                        distributed=False,
@@ -117,15 +123,7 @@ def main():
         from vilbert.vilbert import VILBertForVLTasks
     
     config = BertConfig.from_json_file(args.config_file)
-    with open('./vilbert_tasks.yml', 'r') as f:
-        task_cfg = edict(yaml.safe_load(f))
     
-    task_names = []
-    for i, task_id in enumerate(args.tasks.split('-')):
-        task = 'TASK' + task_id
-        name = task_cfg[task]['name']
-        task_names.append(name)
-
     timeStamp = args.from_pretrained.split('/')[-1] + '-' + args.save_name
     config = BertConfig.from_json_file(args.config_file)
     default_gpu=True
@@ -154,33 +152,16 @@ def main():
         encoder = VILBertForVLTasks.from_pretrained(
             args.from_pretrained, config=config, num_labels=num_labels, default_gpu=default_gpu
             )
-        
-    encoder.eval()
-    #model.eval
-    cuda = torch.cuda.is_available()
-    if cuda: encoder = encoder.cuda(0)
-    n_gpu = torch.cuda.device_count()
-
-    logger.info(
-        "device: {} n_gpu: {}".format(
-            device, n_gpu
-        )
-    )
     
     random.seed(args.seed)
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
 
-    if n_gpu>0:
-        torch.cuda.manual_seed_all(args.seed)
     # Load pre-trained model tokenizer (vocabulary)
     tokenizer = BertTokenizer.from_pretrained(
-    args.bert_model, do_lower_case=args.do_lower_case
+        args.bert_model, do_lower_case=args.do_lower_case
     )
     
-    # Load pre-trained model (weights)
-    BertForDecoder = BertModel.from_pretrained('bert-base-uncased').to(device)
-    BertForDecoder.eval()
     
     """
     Training and validation.
@@ -189,22 +170,22 @@ def main():
     global best_bleu4, epochs_since_improvement, checkpoint, start_epoch, fine_tune_encoder, data_name, word_map
             
     if checkpoint is None:
+        # Load pre-trained model (weights)
+        BertForDecoder = BertModel.from_pretrained(args.bertmodel).to(device)
+        BertForDecoder.eval()
         decoder = DecoderWithBertEmbedding(vocab_size=30522,use_glove=False, use_bert=True, tokenizer=tokenizer, BertModel=BertForDecoder)
         decoder_optimizer = torch.optim.Adam(params=filter(lambda p: p.requires_grad, decoder.parameters()),
                                              lr=decoder_lr)
-        # encoder = model #Encoder()
         # encoder.fine_tune(fine_tune_encoder)
         encoder_optimizer = torch.optim.Adam(params=filter(lambda p: p.requires_grad, encoder.parameters()),
                                              lr=encoder_lr) if fine_tune_encoder else None
     else: 
-        # checkpoint = torch.load(checkpoint)
-        print(f"checkpoint : {checkpoint}")
-        checkpoint = torch.load(checkpoint, map_location=str(device))
+        logger.info(f"Loaded from checkpoint: {checkpoint}")
+        checkpoint = torch.load(PATH + 'checkpoints/' + checkpoint, map_location=str(device))
         start_epoch = checkpoint['epoch'] + 1
         epochs_since_improvement = checkpoint['epochs_since_improvement']
         best_bleu4 = checkpoint['bleu-4']
         decoder = checkpoint['decoder']
-        print("!!!!",count_parameters(decoder))
         decoder_optimizer = checkpoint['decoder_optimizer']
         encoder = checkpoint['encoder']
         encoder_optimizer = checkpoint['encoder_optimizer']
@@ -212,23 +193,34 @@ def main():
             # encoder.fine_tune(fine_tune_encoder)
             encoder_optimizer = torch.optim.Adam(params=filter(lambda p: p.requires_grad, encoder.parameters()),
                                                  lr=encoder_lr)
+    
+    n_gpu = torch.cuda.device_count()
 
+    if n_gpu>0:
+        torch.cuda.manual_seed_all(args.seed)
+
+    logger.info(
+        "device: {} n_gpu: {}".format(
+            device, n_gpu
+        )
+    )     
+    
+    if n_gpu>1:
+        encoder = nn.DataParallel(encoder)
+        # decoder = nn.DataParallel(decoder)
     # Move to GPU, if available
     decoder = decoder.to(device)
     encoder = encoder.to(device)
-    if n_gpu>1:
-        # encoder = torch.nn.DataParallel(encoder)
-        decoder = torch.nn.DataParallel.to(decoder)
+
+    encoder.eval()
 
     # Loss function
     criterion = nn.CrossEntropyLoss().to(device)
 
     # Custom dataloaders
-    normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                                     std=[0.229, 0.224, 0.225])
     train_loader = torch.utils.data.DataLoader(
         ContextCaptionDataset(
-            task,
+            "TASK19",
             dataroot=PATH,
             annotations_jsonpath=PATH+'jsonlines/FA.jsonline',
             split='train',
@@ -240,7 +232,7 @@ def main():
         batch_size=batch_size, shuffle=True, num_workers=workers, pin_memory=True)
     val_loader = torch.utils.data.DataLoader(
         ContextCaptionDataset(
-            task,
+            "TASK19",
             dataroot=PATH,
             annotations_jsonpath=PATH+'jsonlines/FA.jsonline',
             split='val',
@@ -256,8 +248,8 @@ def main():
     logger.info("  Num steps = %d", epochs)
 
     logger.info("*****Total Number of Parameters*****")
-    logger.info("   Encoder # = %d", count_parameters(encoder))
-    logger.info("   Decoder # = %d", count_parameters(decoder))
+    logger.info("  Encoder # = %d", count_parameters(encoder))
+    logger.info("  Decoder # = %d", count_parameters(decoder))
 
     # Epochs
     for epoch in range(start_epoch, epochs):
@@ -431,7 +423,7 @@ def validate(val_loader, encoder, decoder, criterion, tokenizer):
     
     test_references = list()
     references = list()  # references (true captions) for calculating BLEU-4 score
-    hypotheses = list()  # hypotheses (predictions)
+    hypothesis = list()  # hypothesis (predictions)
 
     # explicitly disable gradient calculation to avoid CUDA memory error
     # solves the issue #57
@@ -445,11 +437,6 @@ def validate(val_loader, encoder, decoder, criterion, tokenizer):
 
             task_tokens = context.new().resize_(context.size(0), 1).fill_(19) 
 
-            #(imgs, caps, caplens, allcaps)
-            # Move to device, if available
-            # imgs = imgs.to(device)
-            # caps = caps.to(device)
-            # caplens = caplens.to(device)
             
             # Move to GPU, if available
             context = context.to(device)
@@ -521,7 +508,7 @@ def validate(val_loader, encoder, decoder, criterion, tokenizer):
                 test_references.append(clean_cap) # 
                 references.append(img_captions) 
             
-            # Hypotheses
+            # hypothesis
             # preds.shape torch.Size([32, 29])
             _, preds = torch.max(scores, dim=2) ################# dim=1(changed) <- dim=2(original)
                 # _, preds ==> values, and index respectively 
@@ -541,12 +528,12 @@ def validate(val_loader, encoder, decoder, criterion, tokenizer):
                 pred = [w for w in pred if w not in ["[PAD]", "[CLS]","[SEP]"]]
                 temp_preds.append(pred)  # remove pads, start, and end
             preds = temp_preds
-            hypotheses.extend(preds)
+            hypothesis.extend(preds)
 
-            assert len(references) == len(hypotheses)
+            assert len(references) == len(hypothesis)
         
         # Calculate BLEU-4 scores
-        bleu4 = corpus_bleu(references, hypotheses)
+        bleu4 = corpus_bleu(references, hypothesis)
         
         print(
             '\n * LOSS - {loss_avg:.3f}, TOP-5 ACCURACY - {top5_avg:.3f}, BLEU-4 - {bleu}\n'.format(
@@ -554,7 +541,7 @@ def validate(val_loader, encoder, decoder, criterion, tokenizer):
                 top5_avg=float(top5accs.avg),
                 bleu=bleu4))
         # print(f"references : {references}")
-        # print(f"hypotheses : {hypotheses}")
+        # print(f"hypothesis : {hypothesis}")
 
     return bleu4
 
