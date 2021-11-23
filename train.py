@@ -200,8 +200,8 @@ def main():
         "device: {} n_gpu: {}".format(
             device, n_gpu
         )
-    )     
-    
+    )
+
     if n_gpu>1:
         encoder = nn.DataParallel(encoder)
         # decoder = nn.DataParallel(decoder)
@@ -219,10 +219,10 @@ def main():
         ContextCaptionDataset(
             "TASK19",
             dataroot=PATH,
-            annotations_jsonpath=PATH+'jsonlines/FA.jsonline',
+            annotations_jsonpath= PATH + 'jsonlines/' + args.d + '.jsonline',
             split='train',
-            features_h5path1 = PATH+'lmdbs/FA',
-            features_h5path2 = '', #gt_image_features_reader='',
+            features_h5path1 = PATH + 'lmdbs/' + args.d,
+            features_h5path2 = '', 
             tokenizer=tokenizer,
             bert_model=args.bert_model,
             ),
@@ -231,10 +231,10 @@ def main():
         ContextCaptionDataset(
             "TASK19",
             dataroot=PATH,
-            annotations_jsonpath=PATH+'jsonlines/FA.jsonline',
+            annotations_jsonpath= PATH + 'jsonlines/' + args.d + '.jsonline',
             split='val',
-            features_h5path1 = PATH+'lmdbs/FA',
-            features_h5path2 = '', #gt_image_features_reader='',
+            features_h5path1 = PATH + 'lmdbs/' + args.d,
+            features_h5path2 = '',
             tokenizer=tokenizer,
             bert_model=args.bert_model,
             ),
@@ -472,9 +472,7 @@ def validate(val_loader, encoder, decoder, criterion, tokenizer):
                             #[32, 29, 30522] , torch.Size([32]) <= [tensor([29]), .. , tensor([29])]  
             
             targets_packed, _, _, _ = pack_padded_sequence(targets, decode_lengths, batch_first=True)
-            # print()
 
-            # Calculate loss
             loss = criterion(scores_packed, targets_packed)
 
             # Add doubly stochastic attention regularization
@@ -492,8 +490,7 @@ def validate(val_loader, encoder, decoder, criterion, tokenizer):
                 print('Validation: [{0}/{1}]\t'
                       'Batch Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
                       'Loss {loss_val:.4f} ({loss_avg:.4f})\t'
-                      'Top-5 Accuracy {top5_val:.3f} ({top5_avg:.3f})\t'.format(i, len(val_loader), batch_time=batch_time,
-                                                                                loss_val = float(losses.val), loss_avg = float(losses.avg), top5_val = float(top5accs.val), top5_avg=float(top5accs.avg)))    
+                      'Top-5 Accuracy {top5_val:.3f} ({top5_avg:.3f})\t'.format(i, len(val_loader), batch_time=batch_time,                                                          loss_val = float(losses.val), loss_avg = float(losses.avg), top5_val = float(top5accs.val), top5_avg=float(top5accs.avg)))    
             
              # References
             for j in range(targets.shape[0]): # 32? 
@@ -507,7 +504,7 @@ def validate(val_loader, encoder, decoder, criterion, tokenizer):
             
             # hypothesis
             # preds.shape torch.Size([32, 29])
-            _, preds = torch.max(scores, dim=2) ################# dim=1(changed) <- dim=2(original)
+            _, preds = torch.max(scores, dim=2)
                 # _, preds ==> values, and index respectively 
                 # "dim =1" means it extracts 928 elements from 928 * 30522. that is, criterion is dim 1 which will be shrinked
             # print(f"predicted logits : {preds}")
@@ -522,7 +519,7 @@ def validate(val_loader, encoder, decoder, criterion, tokenizer):
                 # pred = p[:decode_lengths[j]] # decode_lenths is from decoder's 3rd output, like ... 29? 30? 
                 pred = p[:decode_lengths[j]]
                 pred = [w for w in pred if w not in ["[PAD]", "[CLS]","[SEP]"]]
-                hypothesis.append(pred)  # remove pads, start, and end
+                hypothesis.append(' '.join(pred))  # remove pads, start, and end
 
             assert len(references) == len(hypothesis)
         

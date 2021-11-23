@@ -4,15 +4,10 @@
 # LICENSE file in the root directory of this source tree.
 
 from typing import List
-import csv
-import h5py
 import numpy as np
 import copy
 import pickle
-import lmdb  # install lmdb by "pip install lmdb"
-import base64
-import pdb
-
+import lmdb
 
 class ImageFeaturesH5Reader(object):
     """

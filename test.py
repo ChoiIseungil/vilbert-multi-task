@@ -18,7 +18,7 @@ from nltk.translate.bleu_score import corpus_bleu
 
 import os
 os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
-os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+os.environ["CUDA_VISIBLE_DEVICES"] = "0,1,2,3,4,5,6"
 
 PATH = '/mnt/nas2/seungil/'  # folder with data files saved by create_input_files.py
 
@@ -31,7 +31,6 @@ cudnn.benchmark = True  # set to true only if inputs to model are fixed size; ot
 
 # Training parameters
 workers = 1  # for data-loading; right now, only 1 works with h5py
-print_freq = 100  # print training/validation stats every __ batches
 from_checkpoint_encoder = False 
 from_checkpoint_decoder = False
 
@@ -160,10 +159,10 @@ def main():
         ContextCaptionDataset(
             "TASK19",
             dataroot=PATH,
-            annotations_jsonpath=PATH+'jsonlines/' + args.d + 'FA.jsonline',
-            split='val',
-            features_h5path1 = PATH+'lmdbs/' + args.d,
-            features_h5path2 = '', #gt_image_features_reader='',
+            annotations_jsonpath= PATH + 'jsonlines/' + args.d + '.jsonline',
+            split='test',
+            features_h5path1 = PATH + 'lmdbs/' + args.d,
+            features_h5path2 = '', 
             tokenizer=tokenizer,
             bert_model=args.bert_model,
             ),
@@ -253,7 +252,6 @@ def test(test_loader, encoder, decoder, criterion, tokenizer):
             # Add doubly stochastic attention regularization
             loss += alpha_c * ((1. - alphas.sum(dim=1)) ** 2).mean()
 
-
             # Keep track of metrics
             losses.update(loss.item(), sum(decode_lengths))
             top5 = accuracy(scores_packed, targets_packed, 5)
@@ -266,16 +264,15 @@ def test(test_loader, encoder, decoder, criterion, tokenizer):
                     'Batch Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
                     'Loss {loss_val:.4f} ({loss_avg:.4f})\t'
                     'Top-5 Accuracy {top5_val:.3f} ({top5_avg:.3f})\t'.format(i, len(test_loader), batch_time=batch_time,
-                                                                            loss_val = float(losses.val), loss_avg = float(losses.avg), top5_val = float(top5accs.val), top5_avg=float(top5accs.avg)))    
+                                           loss_val = float(losses.val), loss_avg = float(losses.avg), top5_val = float(top5accs.val), top5_avg=float(top5accs.avg)))    
             
              # References
             for j in range(targets.shape[0]): #16  #[batch size, max seq len?] == [16, 29]
                 img_caps = targets[j].tolist() # validation dataset only has 1 unique caption per img
                 img_caps = tokenizer.convert_ids_to_tokens(img_caps) # th) it has to be a one sentence
-                # print(f"img_caps check! is it a sentence ? \n{img_caps}")
                 clean_cap = [w for w in img_caps if w not in ["[PAD]","[CLS]","[SEP]"]]  # remove pad, start, and end # clean function
-                img_captions = list(map(lambda c: clean_cap,img_caps)) # th) img_captions has to be a one clean sentence. 
-                references.append([img_captions[0]])
+                # img_captions = list(map(lambda c: clean_cap,img_caps)) # th) img_captions has to be a one clean sentence. 
+                references.append(' '.join(clean_cap))
                 
             
             # hypothesis
@@ -295,10 +292,11 @@ def test(test_loader, encoder, decoder, criterion, tokenizer):
                 # pred = p[:decode_lengths[j]] # decode_lenths is from decoder's 3rd output, like ... 29? 30? 
                 pred = p[:decode_lengths[j]]
                 pred = [w for w in pred if w not in ["[PAD]", "[CLS]","[SEP]"]]
-                hypothesis.append(pred)  # remove pads, start, and end
+                hypothesis.append(' '.join(pred))  # remove pads, start, and end
 
             assert len(references) == len(hypothesis)
         
+        # BLUE score가 이렇게 들가면 안됨
         # Calculate BLEU-4 scores
         bleu4 = corpus_bleu(references, hypothesis)
         stats = '\n * LOSS - {loss_avg:.3f}, TOP-5 ACCURACY - {top5_avg:.3f}, BLEU-4 - {bleu}\n'.format(
@@ -307,11 +305,11 @@ def test(test_loader, encoder, decoder, criterion, tokenizer):
                 bleu=bleu4)
         # Writing results in tests/
         
-        f = open(PATH + 'tests/'+ checkpoint_name + 'tested on' +  data_name + '.txt','w')
-        f.write(checkpoint_name + 'tested on' +  data_name)
+        f = open(PATH + 'tests/'+ checkpoint_name + '_on_' +  data_name + '.txt','w')
+        f.write(checkpoint_name + ' tested on ' +  data_name + '\n')
         f.write(message+'\n')
-        f.write(stats)
-        
+        f.write(stats+'\n')
+        f.write("outputs \t groud truths")
         for r,h in zip(references,hypothesis):
             f.write(r + '\t' + h + '\n')
         

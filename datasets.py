@@ -58,7 +58,6 @@ def _load_annotations(annotations_jsonpath):
             }
         )
         
-    print(f"_load_annotations >>> entries : {entries}")
     return entries
 
 
@@ -205,6 +204,7 @@ class ContextCaptionDataset(Dataset): #FoilClassificationDataset
         # caplen 
         caplen = torch.LongTensor([len(target)])
         
+        #TODO: 이해하기
         # For validation of testing, also return all 'captions_per_image' captions to find BLEU-4 score
         # self.cpi = 1
         # all_captions = torch.LongTensor(
@@ -223,7 +223,7 @@ class ContextCaptionDataset(Dataset): #FoilClassificationDataset
                 caplen,
                 #all_captions,
             )
-            
+        # TODO: split 제대로 고치기
         # if self.split == 'train' : 
         #     return (
         #         features,
