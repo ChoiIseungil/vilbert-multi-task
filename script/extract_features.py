@@ -5,6 +5,15 @@
 
 # Requires vqa-maskrcnn-benchmark to be built and installed. See Readme
 # for more details.
+"""
+Usage e.g) 
+python script/extract_features.py --model_file data/detectron_model.pth --config_file data/detectron_config.yaml --image ../../mnt/nas2/seungil/refined_legacy/AA6.csv --output_folder ../../mnt/nas2/seungil/features/AA6/ --batch_size 4 --gpu_num 4
+python script/extract_features.py --image ../../mnt/nas2/seungil/refined_legacy/AA7.csv --output_folder ../../mnt/nas2/seungil/features/AA7/ --batch_size 4 --gpu_num 5
+python script/extract_features.py --image ../../mnt/nas2/seungil/refined_legacy/AA8.csv --output_folder ../../mnt/nas2/seungil/features/AA8/ --batch_size 4 --gpu_num 6
+python script/extract_features.py --image ../../mnt/nas2/seungil/refined_legacy/AA9.csv --output_folder ../../mnt/nas2/seungil/features/AA9/ --batch_size 4 --gpu_num 7
+
+"""
+
 
 import argparse
 import glob
@@ -15,6 +24,7 @@ import numpy as np
 import torch
 from PIL import Image
 
+
 import sys
 sys.path.insert(0,'../vqa-maskrcnn-benchmark/')
 from maskrcnn_benchmark.config import cfg
@@ -23,25 +33,27 @@ from maskrcnn_benchmark.modeling.detector import build_detection_model
 from maskrcnn_benchmark.structures.image_list import to_image_list
 from maskrcnn_benchmark.utils.model_serialization import load_state_dict
 
+import pandas as pd
+from bs4 import BeautifulSoup
+from urllib.request import urlopen
 
 class FeatureExtractor:
     MAX_SIZE = 1333
-    MIN_SIZE = 10 #800
+    MIN_SIZE = 800
 
-    def __init__(self,image_dir):
+    def __init__(self):
         self.args = self.get_parser().parse_args()
         self.detection_model = self._build_detection_model()
-        self.image_dir = image_dir
 
         os.makedirs(self.args.output_folder, exist_ok=True)
 
     def get_parser(self):
         parser = argparse.ArgumentParser()
         parser.add_argument(
-            "--model_file", default=None, type=str, help="Detectron model file"
+            "--model_file", default='data/detectron_model.pth', type=str, help="Detectron model file"
         )
         parser.add_argument(
-            "--config_file", default=None, type=str, help="Detectron config file"
+            "--config_file", default='data/detectron_config.yaml', type=str, help="Detectron config file"
         )
         parser.add_argument("--batch_size", type=int, default=2, help="Batch size")
         parser.add_argument(
@@ -53,7 +65,7 @@ class FeatureExtractor:
         parser.add_argument(
             "--output_folder", type=str, default="./output", help="Output folder"
         )
-        # parser.add_argument("--image_dir", type=str, help="Image directory or file")
+        parser.add_argument("--image_dir", type=str, help="Image directory or file")
         parser.add_argument(
             "--feature_name",
             type=str,
@@ -74,6 +86,9 @@ class FeatureExtractor:
         parser.add_argument(
             "--partition", type=int, default=0, help="Partition to download."
         )
+        parser.add_argument(
+            "--gpu_num", type=int, default=0, help="A number of GPU will use"
+        )
         return parser
 
     def _build_detection_model(self):
@@ -85,32 +100,50 @@ class FeatureExtractor:
 
         load_state_dict(model, checkpoint.pop("model"))
 
-        # model.to("cuda")
-        model.device='cpu'
+        torch.cuda.set_device(f"cuda:{self.args.gpu_num}")
+
+        model.to(f"cuda:{self.args.gpu_num}")
         model.eval()
         return model
 
-    def _image_transform(self, path):
-        img = Image.open(path)
-        im = np.array(img).astype(np.float32)
+    def _image_transform(self, path): #each row
+        # print(f"_image_transform : path parameter check : {path}")
+        image_url = "https:" + path['image url'] 
+        # print("image url: ",image_url)
+        if image_url.split('.')[-1] == 'gif' : 
+            print(f"Oops, it's a  gif file format.")
+        with urlopen(image_url) as f : 
+            image_bytes = f.read()
+        # print("bytes length",len(image_bytes))
+        encoded_img = np.fromstring(image_bytes, dtype = np.uint8)
+        img = cv2.imdecode(encoded_img, cv2.IMREAD_COLOR)
+        # print("check ::: img type from cv2 :::" , type(img))
+
+
+        im = img.astype(np.float32)
+
+        # img = Image.open(path)
+        # im = np.array(img).astype(np.float32)        
         # IndexError: too many indices for array, grayscale images
-        
+        # if len(im.shape) < 3:
+        #     im = np.repeat(im[:, :, np.newaxis], 3, axis=2)
+
         if len(im.shape) < 3:
             im = np.repeat(im[:, :, np.newaxis], 3, axis=2)
         else:
             if im.shape[2]>3:
                 im=im[:,:,:3]
             elif im.shape[2]<3:
-                im=np.concatenate((im,im[:,:,[1]]),axis=2)
+                im=np.concatenate((im, im[:,:,[1]]), axis=2)
 
         im = im[:, :, ::-1]
-        # im -= np.array([102.9801, 115.9465, 122.7717])
+        im -= np.array([102.9801, 115.9465, 122.7717])
         im_shape = im.shape
         im_height = im_shape[0]
         im_width = im_shape[1]
         im_size_min = np.min(im_shape[0:2])
         im_size_max = np.max(im_shape[0:2])
-        
+
         # Scale based on minimum size
         im_scale = self.MIN_SIZE / im_size_min
 
@@ -118,13 +151,14 @@ class FeatureExtractor:
         # If bigger, scale it down
         if np.round(im_scale * im_size_max) > self.MAX_SIZE:
             im_scale = self.MAX_SIZE / im_size_max
+
         im = cv2.resize(
-            im, (256, 256), fx=im_scale, fy=im_scale, interpolation=cv2.INTER_LINEAR
+            im, None, None, fx=im_scale, fy=im_scale, interpolation=cv2.INTER_LINEAR
         )
         img = torch.from_numpy(im).permute(2, 0, 1)
 
         im_info = {"width": im_width, "height": im_height}
-        
+
         return img, im_scale, im_info
 
     def _process_feature_extraction(
@@ -182,22 +216,28 @@ class FeatureExtractor:
 
         return feat_list, info_list
 
-    def get_detectron_features(self, image_paths):
+    def get_detectron_features(self, image_paths): # some rows are input
         img_tensor, im_scales, im_infos = [], [], []
-        for image_path in image_paths:
-            im, im_scale, im_info = self._image_transform(image_path)
+
+        # print(f"image paths (input of get detectron features) : {image_paths}")
+
+        # for image_path in image_paths: # image_path is each row
+
+        for df_index, row in image_paths.iterrows():
+            # print(f"idx: {df_index}\ttitle: {row['title']}")
+            im, im_scale, im_info = self._image_transform(row) # each row 
             img_tensor.append(im)
             im_scales.append(im_scale)
             im_infos.append(im_info)
+
         # Image dimensions should be divisible by 32, to allow convolutions
-        # in detector to work'
-        
+        # in detector to work
         current_img_list = to_image_list(img_tensor, size_divisible=32)
-        # current_img_list = current_img_list.to("cuda")
-        
+        current_img_list = current_img_list.to(f"cuda:{self.args.gpu_num }")
+
         with torch.no_grad():
             output = self.detection_model(current_img_list)
-            
+
         feat_list = self._process_feature_extraction(
             output,
             im_scales,
@@ -214,49 +254,56 @@ class FeatureExtractor:
 
     def _save_feature(self, file_name, feature, info):
         file_base_name = os.path.basename(file_name)
-        file_base_name = file_base_name.split(".")[0]
+        # file_base_name = file_base_name.split(".")[0]
+        file_base_name = file_base_name.replace(".","")
         info["image_id"] = file_base_name
         info["features"] = feature.cpu().numpy()
         file_base_name = file_base_name + ".npy"
 
         np.save(os.path.join(self.args.output_folder, file_base_name), info)
+        print(f"{file_base_name} is saved")
 
     def extract_features(self):
         image_dir = self.args.image_dir
-        print(image_dir)
-        if os.path.isfile(image_dir):
+
+        # if self.args.image_dir.split('.')[-1] == 'csv' : 
+        #     print("a CSV file is detected")
+        #     image_df = pd.read_csv(self.args.image_dir)
+
+
+        if os.path.isfile(image_dir) and self.args.image_dir.split('.')[-1] != 'csv':
             features, infos = self.get_detectron_features([image_dir])
-            
             self._save_feature(image_dir, features[0], infos[0])
-            print("A extracted feature is saved.")
+        
+        elif self.args.image_dir.split('.')[-1] == 'csv' : 
+            print("a CSV file is detected")
+            image_df = pd.read_csv(self.args.image_dir)
+            # image_html = image_df['image url']
+            # for index, row in df.iterrows() : 
+            for chunk in self._chunks(image_df, self.args.batch_size): # chunk is some rows in df
+                try : 
+                    features, infos = self.get_detectron_features(chunk) # some rows will be input data
+                    # print(f"check len features : {len(features)}") 4
+                    # print(f"check len chunks : {len(chunk)}") 4 
+                    # I think the pair is well matched 
+                    # ,,, but Hm some items seem missed
+                    for i, (df_idx, row) in enumerate(chunk.iterrows()): # idx have to be matched with ,,, row index 
+                        file_name = row['title'] + '_' + str(row['Unnamed: 0'])   # + str(df_idx)
+                        self._save_feature(file_name, features[i], infos[i])
+                except Exception as e : 
+                    print(f"error : {e}")
+                    continue 
         else:
-            
-            # files = glob.iglob(os.path.join(path + dir, "*.jpg"))
-            files = glob.glob(image_dir + '/**/*.jpg')
-            print(f"N of files : {len(files)}")
-            #origin code # files = glob.glob(os.path.join(image_dir, "*")) 
+            files = glob.glob(os.path.join(image_dir, "*"))
             # files = sorted(files)
             # files = [files[i: i+1000] for i in range(0, len(files), 1000)][self.args.partition]
-            e=0
-            c=0
             for chunk in self._chunks(files, self.args.batch_size):
-                c=c+1
-                if c%100 == 0:
-                    print(c,e)
-
                 try:
                     features, infos = self.get_detectron_features(chunk)
                     for idx, file_name in enumerate(chunk):
-                        file_name=file_name.split('.jpg')[0].replace(".","")+".jpg"
-                        print(file_name)
                         self._save_feature(file_name, features[idx], infos[idx])
-                        
-                except BaseException as b:
-                    # print(f"fail to save {chuck}")
-                    e=e+1
-                    print(f"Errodr : {b}")
+                except BaseException:
                     continue
-            print(c,e,"@@@@@@@@@@@@@@@@@@@")        
 
 
 if __name__ == "__main__":
