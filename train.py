@@ -69,7 +69,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-def main():
+
+def get_parser(): 
     parser = argparse.ArgumentParser()
 
     parser.add_argument(
@@ -81,10 +82,15 @@ def main():
         type=int,
         help="batch_size"
     )
+    return parser
+
+def main():
+
+    parser = get_parser()
+    args = parser.parse_args(args)
     
     """
     From ViLBERT
-    
     """
     
     args = SimpleNamespace(from_pretrained= PATH + "pretrained_model.bin",
@@ -168,7 +174,7 @@ def main():
             
     if checkpoint is None:
         # Load pre-trained model (weights)
-        BertForDecoder = BertModel.from_pretrained(args.bertmodel).to(device)
+        BertForDecoder = BertModel.from_pretrained(args.bert_model).to(device)
         BertForDecoder.eval()
         decoder = DecoderWithBertEmbedding(vocab_size=30522,use_glove=False, use_bert=True, tokenizer=tokenizer, BertModel=BertForDecoder)
         decoder_optimizer = torch.optim.Adam(params=filter(lambda p: p.requires_grad, decoder.parameters()),
