@@ -4,8 +4,8 @@
 # LICENSE file in the root directory of this source tree.
 
 # Command: 
-# sh script/run_convert_to_lmdb.sh
-# python script/convert_to_lmdb.py --data AA1
+# ./script/run_convert_to_lmdb.sh
+# python script/convert_to_lmdb.py --data AA1,AA2,AA3 --out train 
 
 import argparse
 import glob
@@ -24,18 +24,27 @@ def get_parser():
     parser.add_argument(
         "--data", 
         required = True,
-        default=None, 
-        type=str, 
-        help="Path to extracted features file"
+        default = None, 
+        type = str, 
+        help = "Path to extracted features file (Can read multiple files at once)"
+    )
+    parser.add_argument(
+        "--out", 
+        required = True,
+        default = None, 
+        type = str, 
+        help = "Path to extracted features file"
     )
     return parser
 
-
-if __name__ == "__main__":
+def main():
     args = get_parser().parse_args()
-    infiles = glob.glob(os.path.join(PATH + 'features/' + args.data, "*"))
+    infiles = []
     id_list = []
-    env = lmdb.open(PATH + 'lmdbs/' + args.data + '/', map_size=MAP_SIZE)
+    for file in args.data.split(','):
+        infiles.extend(glob.glob(os.path.join(PATH + 'features/' + file, "*")))
+
+    env = lmdb.open(PATH + 'lmdbs/' + args.out + '/', map_size=MAP_SIZE)
 
     with env.begin(write=True) as txn:
         for infile in tqdm.tqdm(infiles):
@@ -52,3 +61,7 @@ if __name__ == "__main__":
             txn.put(img_id, pickle.dumps(item))
             
         txn.put("keys".encode(), pickle.dumps(id_list))
+
+
+if __name__ == "__main__":
+    main()

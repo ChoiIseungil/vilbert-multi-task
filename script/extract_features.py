@@ -7,13 +7,12 @@
 # for more details.
 """
 Usage e.g) 
-python script/extract_features.py --model_file data/detectron_model.pth --config_file data/detectron_config.yaml --image ../../mnt/nas2/seungil/refined_legacy/AA6.csv --output_folder ../../mnt/nas2/seungil/features/AA6/ --batch_size 4 --gpu_num 4
-python script/extract_features.py --image ../../mnt/nas2/seungil/refined_legacy/AA7.csv --output_folder ../../mnt/nas2/seungil/features/AA7/ --batch_size 4 --gpu_num 5
-python script/extract_features.py --image ../../mnt/nas2/seungil/refined_legacy/AA8.csv --output_folder ../../mnt/nas2/seungil/features/AA8/ --batch_size 4 --gpu_num 6
-python script/extract_features.py --image ../../mnt/nas2/seungil/refined_legacy/AA9.csv --output_folder ../../mnt/nas2/seungil/features/AA9/ --batch_size 4 --gpu_num 7
-
+./script/run_extract_features.sh
+python script/extract_features.py --data GA --batch_size 8 --gpu_num 5
 """
 
+CSVPATH = "/mnt/nas2/seungil/refined_legacy/"
+FEATUREPATH = "/mnt/nas2/seungil/features/"
 
 import argparse
 import glob
@@ -34,7 +33,6 @@ from maskrcnn_benchmark.structures.image_list import to_image_list
 from maskrcnn_benchmark.utils.model_serialization import load_state_dict
 
 import pandas as pd
-from bs4 import BeautifulSoup
 from urllib.request import urlopen
 
 class FeatureExtractor:
@@ -43,19 +41,32 @@ class FeatureExtractor:
 
     def __init__(self):
         self.args = self.get_parser().parse_args()
+        self.csvpath = CSVPATH + self.args.data + '.csv'
+        self.featurepath = FEATUREPATH + self.args.data + '/'
         self.detection_model = self._build_detection_model()
 
-        os.makedirs(self.args.output_folder, exist_ok=True)
+        os.makedirs(self.featurepath, exist_ok=True)
 
     def get_parser(self):
         parser = argparse.ArgumentParser()
         parser.add_argument(
-            "--model_file", default='data/detectron_model.pth', type=str, help="Detectron model file"
+            "--model_file", 
+            default='data/detectron_model.pth', 
+            type=str, 
+            help="Detectron model file"
         )
         parser.add_argument(
-            "--config_file", default='data/detectron_config.yaml', type=str, help="Detectron config file"
+            "--config_file", 
+            default='data/detectron_config.yaml', 
+            type=str, 
+            help="Detectron config file"
         )
-        parser.add_argument("--batch_size", type=int, default=2, help="Batch size")
+        parser.add_argument(
+            "--batch_size", 
+            type=int, 
+            default=2, 
+            help="Batch size"
+        )
         parser.add_argument(
             "--num_features",
             type=int,
@@ -63,9 +74,10 @@ class FeatureExtractor:
             help="Number of features to extract.",
         )
         parser.add_argument(
-            "--output_folder", type=str, default="./output", help="Output folder"
+            "--data", 
+            type=str, 
+            help="Image directory or file"
         )
-        parser.add_argument("--image_dir", type=str, help="Image directory or file")
         parser.add_argument(
             "--feature_name",
             type=str,
@@ -84,10 +96,10 @@ class FeatureExtractor:
             help="The model will output predictions for the background class when set",
         )
         parser.add_argument(
-            "--partition", type=int, default=0, help="Partition to download."
-        )
-        parser.add_argument(
-            "--gpu_num", type=int, default=0, help="A number of GPU will use"
+            "--gpu_num", 
+            type=int, 
+            default=0, 
+            help="A number of GPU will use"
         )
         return parser
 
@@ -106,27 +118,25 @@ class FeatureExtractor:
         model.eval()
         return model
 
-    def _image_transform(self, path): #each row
-        # print(f"_image_transform : path parameter check : {path}")
+    def _image_transform(self, path):
         image_url = "https:" + path['image url'] 
-        # print("image url: ",image_url)
         if image_url.split('.')[-1] == 'gif' : 
             print(f"Oops, it's a  gif file format.")
-        with urlopen(image_url) as f : 
-            image_bytes = f.read()
-        # print("bytes length",len(image_bytes))
+
+        image_bytes = None
+        while image_bytes is not None:
+            try:
+                with urlopen(image_url) as f : 
+                    image_bytes = f.read()
+            except:
+                print("Too many request Error T.T")
+        
         encoded_img = np.fromstring(image_bytes, dtype = np.uint8)
         img = cv2.imdecode(encoded_img, cv2.IMREAD_COLOR)
-        # print("check ::: img type from cv2 :::" , type(img))
 
 
         im = img.astype(np.float32)
 
-        # img = Image.open(path)
-        # im = np.array(img).astype(np.float32)        
-        # IndexError: too many indices for array, grayscale images
-        # if len(im.shape) < 3:
-        #     im = np.repeat(im[:, :, np.newaxis], 3, axis=2)
 
         if len(im.shape) < 3:
             im = np.repeat(im[:, :, np.newaxis], 3, axis=2)
@@ -254,49 +264,36 @@ class FeatureExtractor:
 
     def _save_feature(self, file_name, feature, info):
         file_base_name = os.path.basename(file_name)
-        # file_base_name = file_base_name.split(".")[0]
         file_base_name = file_base_name.replace(".","")
         info["image_id"] = file_base_name
         info["features"] = feature.cpu().numpy()
         file_base_name = file_base_name + ".npy"
 
-        np.save(os.path.join(self.args.output_folder, file_base_name), info)
+        np.save(os.path.join(self.featurepath, file_base_name), info)
         print(f"{file_base_name} is saved")
 
     def extract_features(self):
-        image_dir = self.args.image_dir
+        image_dir = self.csvpath
+        extension = image_dir.split('.')[-1]
 
-        # if self.args.image_dir.split('.')[-1] == 'csv' : 
-        #     print("a CSV file is detected")
-        #     image_df = pd.read_csv(self.args.image_dir)
-
-
-        if os.path.isfile(image_dir) and self.args.image_dir.split('.')[-1] != 'csv':
+        if os.path.isfile(image_dir) and extension != 'csv':
             features, infos = self.get_detectron_features([image_dir])
             self._save_feature(image_dir, features[0], infos[0])
         
-        elif self.args.image_dir.split('.')[-1] == 'csv' : 
+        elif extension == 'csv' : 
             print("a CSV file is detected")
-            image_df = pd.read_csv(self.args.image_dir)
-            # image_html = image_df['image url']
-            # for index, row in df.iterrows() : 
+            image_df = pd.read_csv(image_dir)
             for chunk in self._chunks(image_df, self.args.batch_size): # chunk is some rows in df
                 try : 
                     features, infos = self.get_detectron_features(chunk) # some rows will be input data
-                    # print(f"check len features : {len(features)}") 4
-                    # print(f"check len chunks : {len(chunk)}") 4 
-                    # I think the pair is well matched 
-                    # ,,, but Hm some items seem missed
-                    for i, (df_idx, row) in enumerate(chunk.iterrows()): # idx have to be matched with ,,, row index 
-                        file_name = row['title'] + '_' + str(row['Unnamed: 0'])   # + str(df_idx)
+                    for i, (_, row) in enumerate(chunk.iterrows()): # idx have to be matched with ,,, row index 
+                        file_name = str(row['Unnamed: 0']) + '_' + row['title']
                         self._save_feature(file_name, features[i], infos[i])
                 except Exception as e : 
                     print(f"error : {e}")
                     continue 
         else:
             files = glob.glob(os.path.join(image_dir, "*"))
-            # files = sorted(files)
-            # files = [files[i: i+1000] for i in range(0, len(files), 1000)][self.args.partition]
             for chunk in self._chunks(files, self.args.batch_size):
                 try:
                     features, infos = self.get_detectron_features(chunk)

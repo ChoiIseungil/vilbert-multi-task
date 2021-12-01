@@ -1,10 +1,9 @@
-import os 
 import pandas as pd 
 
 
 import argparse 
 
-
+PATH = '/mnt/nas2/seungil/legacy/'
 
 if __name__ == "__main__" : 
     parser = argparse.ArgumentParser() 
@@ -12,7 +11,7 @@ if __name__ == "__main__" :
     parser.add_argument("--out", default="./out.csv", type=str, help="output file name") 
     args = parser.parse_args() 
 
-    df = pd.read_csv(args.load_csv) 
+    df = pd.read_csv(PATH + args.load_csv) 
     
     #print("--origin csv--") 
     #print(df.tail(20))

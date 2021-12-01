@@ -18,7 +18,7 @@ from nltk.translate.bleu_score import corpus_bleu
 
 import os
 os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
-os.environ["CUDA_VISIBLE_DEVICES"] = "0,1,2,3,4,5,6"
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
 PATH = '/mnt/nas2/seungil/'  # folder with data files saved by create_input_files.py
 
@@ -30,7 +30,7 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")  # sets de
 cudnn.benchmark = True  # set to true only if inputs to model are fixed size; otherwise lot of computational overhead
 
 # Training parameters
-workers = 1  # for data-loading; right now, only 1 works with h5py
+workers = 16  # 40 core
 from_checkpoint_encoder = False 
 from_checkpoint_decoder = False
 
@@ -267,13 +267,12 @@ def test(test_loader, encoder, decoder, criterion, tokenizer):
                                            loss_val = float(losses.val), loss_avg = float(losses.avg), top5_val = float(top5accs.val), top5_avg=float(top5accs.avg)))    
             
              # References
-            for j in range(targets.shape[0]): #16  #[batch size, max seq len?] == [16, 29]
+            for j in range(targets.shape[0]):
                 img_caps = targets[j].tolist() # validation dataset only has 1 unique caption per img
                 img_caps = tokenizer.convert_ids_to_tokens(img_caps) # th) it has to be a one sentence
                 clean_cap = [w for w in img_caps if w not in ["[PAD]","[CLS]","[SEP]"]]  # remove pad, start, and end # clean function
                 # img_captions = list(map(lambda c: clean_cap,img_caps)) # th) img_captions has to be a one clean sentence. 
-                references.append(' '.join(clean_cap))
-                
+                references.append(clean_cap)                
             
             # hypothesis
             # preds.shape torch.Size([32, 29])
@@ -292,11 +291,10 @@ def test(test_loader, encoder, decoder, criterion, tokenizer):
                 # pred = p[:decode_lengths[j]] # decode_lenths is from decoder's 3rd output, like ... 29? 30? 
                 pred = p[:decode_lengths[j]]
                 pred = [w for w in pred if w not in ["[PAD]", "[CLS]","[SEP]"]]
-                hypothesis.append(' '.join(pred))  # remove pads, start, and end
+                hypothesis.append(pred)  # remove pads, start, and end
 
             assert len(references) == len(hypothesis)
         
-        # BLUE score가 이렇게 들가면 안됨
         # Calculate BLEU-4 scores
         bleu4 = corpus_bleu(references, hypothesis)
         stats = '\n * LOSS - {loss_avg:.3f}, TOP-5 ACCURACY - {top5_avg:.3f}, BLEU-4 - {bleu}\n'.format(
@@ -309,10 +307,9 @@ def test(test_loader, encoder, decoder, criterion, tokenizer):
         f.write(checkpoint_name + ' tested on ' +  data_name + '\n')
         f.write(message+'\n')
         f.write(stats+'\n')
-        f.write("outputs \t groud truths")
         for r,h in zip(references,hypothesis):
-            f.write(r + '\t' + h + '\n')
-        
+            f.write(' '.join(r)+ '\n' + ' '.join(h) + '\n')
+            f.write('\n')
         f.close()
 
         logger.info("*****Test Done*****")
