@@ -8,11 +8,8 @@
 """
 Usage e.g) 
 ./script/run_extract_features.sh
-python script/extract_features.py --data GA --batch_size 8 --gpu_num 5
+python script/extract_features.py --data GA --batch_size 4 --gpu_num 5
 """
-
-CSVPATH = "/mnt/nas2/seungil/refined_legacy/"
-FEATUREPATH = "/mnt/nas2/seungil/features/"
 
 import argparse
 import glob
@@ -21,11 +18,9 @@ import os
 import cv2
 import numpy as np
 import torch
-from PIL import Image
-
+import time
 
 import sys
-sys.path.insert(0,'../vqa-maskrcnn-benchmark/')
 from maskrcnn_benchmark.config import cfg
 from maskrcnn_benchmark.layers import nms
 from maskrcnn_benchmark.modeling.detector import build_detection_model
@@ -35,6 +30,9 @@ from maskrcnn_benchmark.utils.model_serialization import load_state_dict
 import pandas as pd
 from urllib.request import urlopen
 
+sys.path.insert(0,'../vqa-maskrcnn-benchmark/')
+CSVPATH = "/mnt/nas2/seungil/refined_legacy/"
+FEATUREPATH = "/mnt/nas2/seungil/features/"
 class FeatureExtractor:
     MAX_SIZE = 1333
     MIN_SIZE = 800
@@ -124,12 +122,13 @@ class FeatureExtractor:
             print(f"Oops, it's a  gif file format.")
 
         image_bytes = None
-        while image_bytes is not None:
+        while image_bytes is None:
             try:
                 with urlopen(image_url) as f : 
                     image_bytes = f.read()
             except:
-                print("Too many request Error T.T")
+                print("Too many request Error T.T",image_url)
+                time.sleep(5)
         
         encoded_img = np.fromstring(image_bytes, dtype = np.uint8)
         img = cv2.imdecode(encoded_img, cv2.IMREAD_COLOR)
@@ -228,10 +227,6 @@ class FeatureExtractor:
 
     def get_detectron_features(self, image_paths): # some rows are input
         img_tensor, im_scales, im_infos = [], [], []
-
-        # print(f"image paths (input of get detectron features) : {image_paths}")
-
-        # for image_path in image_paths: # image_path is each row
 
         for df_index, row in image_paths.iterrows():
             # print(f"idx: {df_index}\ttitle: {row['title']}")

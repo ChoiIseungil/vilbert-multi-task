@@ -18,7 +18,7 @@ from utils import save_checkpoint, adjust_learning_rate, accuracy, count_paramet
 from nltk.translate.bleu_score import corpus_bleu
 import os
 
-os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
+# os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
 os.environ["CUDA_VISIBLE_DEVICES"] = "0,1,2,3,4,5,6,7"
 cudnn.benchmark = True  # set to true only if inputs to model are fixed size; otherwise lot of computational overhead
 
