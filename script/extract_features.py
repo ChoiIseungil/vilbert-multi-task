@@ -5,6 +5,7 @@
 
 # Requires vqa-maskrcnn-benchmark to be built and installed. See Readme
 # for more details.
+
 """
 Usage e.g) 
 ./script/run_extract_features.sh
@@ -127,7 +128,7 @@ class FeatureExtractor:
                 with urlopen(image_url) as f : 
                     image_bytes = f.read()
             except:
-                print("Too many request Error T.T",image_url)
+                print("Too many request Error T.T\n",image_url)
                 time.sleep(5)
         
         encoded_img = np.fromstring(image_bytes, dtype = np.uint8)

@@ -3,27 +3,48 @@
 
 import random
 import numpy as np
+import argparse
 import logging
+
 import time
-from requests.api import get
 import torch.backends.cudnn as cudnn
 import torch.optim
 import torch.utils.data
 from torch import nn
 from torch.nn.utils.rnn import pack_padded_sequence
-from models import DecoderWithBertEmbedding 
-import logging
+from models import Encoder, DecoderWithAttention, DecoderWithBertEmbedding
 from datasets import ContextCaptionDataset
 from utils import save_checkpoint, adjust_learning_rate, accuracy, count_parameters, clip_gradient, AverageMeter
 from nltk.translate.bleu_score import corpus_bleu
+
 import os
 
-# os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
-# os.environ["CUDA_VISIBLE_DEVICES"] = "0,1,2,3,4,5,6,7"
+#################### from sgr ###################
+
+# Model parameters
+emb_dim = 512  # dimension of word embeddings
+attention_dim = 512  # dimension of attention linear layers
+decoder_dim = 512  # dimension of decoder RNN
+dropout = 0.5
+device = torch.device(f"cuda" if torch.cuda.is_available() else "cpu")  # sets device for model and PyTorch tensors
+
 cudnn.benchmark = True  # set to true only if inputs to model are fixed size; otherwise lot of computational overhead
 
-
-PATH = '/mnt/nas2/seungil/'  # folder with data files saved by create_input_files.py
+# Training parameters
+start_epoch = 0
+epochs = 120  # number of epochs to train for (if early stopping is not triggered)
+epochs_since_improvement = 0  # keeps track of number of epochs since there's been an improvement in validation BLEU
+batch_size = 4
+# workers = 1  # for data-loading; right now, only 1 works with h5py
+encoder_lr = 1e-4  # learning rate for encoder if fine-tuning
+decoder_lr = 4e-3  # learning rate for decoder #4e-4
+grad_clip = 5.  # clip gradients at an absolute value of
+alpha_c = 1.  # regularization parameter for 'doubly stochastic attention', as in the paper
+best_bleu4 = 0.  # BLEU-4 score right now
+print_freq = 100  # print training/validation stats every __ batches
+fine_tune_encoder = True  # fine-tune encoder?
+checkpoint = None #"BEST_checkpoint_FA_dataset.pth.tar" 
+##################################################
 
 
 ##########################
@@ -32,6 +53,10 @@ from types import SimpleNamespace
 
 from pytorch_transformers.tokenization_bert import BertTokenizer
 from pytorch_transformers.modeling_bert import BertModel
+# it is from demo.py 
+# its purpose is tokenizing a custom input data 
+# here's no need 
+# encoder = model
 ##########################
 
 logging.basicConfig(
@@ -41,42 +66,54 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-def get_args():
-    args = SimpleNamespace(from_pretrained= PATH + "pretrained_model.bin",
-                        bert_model="bert-base-uncased",
-                        config_file="config/bert_base_6layer_6conect.json",
-                        train='train',
-                        val='val',
-                        do_lower_case=True,
-                        predict_feature=False,
-                        seed=42,
-                        workers=16,
-                        baseline=False,
-                        dynamic_attention=False,
-                        task_specific_tokens=True,
-                        batch_size=128,
-                        save_name = 'FA,GA,AA0~AA7',  # base name shared by data files
-                        start_epoch = 0,
-                        epochs = 120,  # number of epochs to train for (if early stopping is not triggered)
-                        epochs_since_improvement = 0,  # keeps track of number of epochs since there's been an improvement in validation BLEU
-                        encoder_lr = 1e-4,  # learning rate for encoder if fine-tuning
-                        decoder_lr = 4e-3,  # learning rate for decoder #4e-4
-                        grad_clip = 5.,  # clip gradients at an absolute value of
-                        alpha_c = 1.,  # regularization parameter for 'doubly stochastic attention', as in the paper
-                        best_bleu4 = 0.,  # BLEU-4 score right now
-                        print_freq = 100,  # print training/validation stats every __ batches
-                        fine_tune_encoder = False,  # fine-tune encoder?
-                        device = torch.device("cuda:4" if torch.cuda.is_available() else "cpu"),  # sets device for model and PyTorch tensors
-                        checkpoint = None #"BEST_checkpoint_FA_dataset.pth.tar"
-    )
-    return args
 
-def main():    
-    """
-    From ViLBERT
+def get_parser(): 
+    parser = argparse.ArgumentParser(description="")
     
+    # vilBERT settings 
+    parser.add_argument("--from_pretrained", type=str, default="/mnt/nas2/seungil/pretrained_model.bin", help="use pretrained model or not")
+    parser.add_argument("--bert_model",type=str,default="bert-base-uncased")
+    parser.add_argument("--config_file", type=str, default="config/bert_base_6layer_6conect.json")
+    parser.add_argument("--max_seq_length", type=int, default=101)
+    parser.add_argument("--train_batch_size", type=int, default=1)
+    parser.add_argument("--do_lower_case", type=bool, default=True)
+    parser.add_argument("--predict_feature", type=bool, default=False)
+    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--num_workers", type=int, default=8)
+    parser.add_argument("--baseline", type=bool, default=False)
+    parser.add_argument("--img_weight", type=int, default=1)
+    parser.add_argument("--distributed", type=bool, default=False)
+    parser.add_argument("--objective", type=int, default=1)
+    parser.add_argument("--visual_target", type=int, default=0)
+    parser.add_argument("--dynamic_attention", type=bool, default=False)
+    parser.add_argument("--task_specific_tokens", type=bool, default=True)
+    parser.add_argument("--tasks,", type=str, default='19')
+    parser.add_argument("--save_name", type=str, default='')
+    parser.add_argument("--in_memory", type=bool, default=False)
+    parser.add_argument("--batch_size", type=int, default=1)
+    parser.add_argument("--local_rank", type=int, default=-1)
+    parser.add_argument("--split", type=str, default='mteval')
+    parser.add_argument("--clean_train_sets", type=bool, default=True)
+
+    # data path settings 
+    parser.add_argument("--datapath", type=str, default='/mnt/nas2/seungil/')
+    parser.add_argument("--train_data",type=str, default="train")
+    parser.add_argument("--val_data", type=str, default="val")
+
+    # gpu settings
+    parser.add_argument("--multi_gpu", type=bool, default=False)
+    parser.add_argument("--gpu_num", type=int, default=7)
+    return parser
+
+def main():
+
+    parser = get_parser()
+    args = parser.parse_args()
+    print(args)
+
     """
-    args = get_args()
+    ViLBERT MODEL settings (ENCODER)
+    """
 
     if args.baseline:
         print("when baseline is True")
@@ -122,35 +159,28 @@ def main():
     torch.manual_seed(args.seed)
 
     # Load pre-trained model tokenizer (vocabulary)
-    tokenizer = BertTokenizer.from_pretrained(
-        args.bert_model, do_lower_case=args.do_lower_case
-    )
-    
-    
-    """
-    Training and validation.
-    """
+    tokenizer = BertTokenizer.from_pretrained(args.bert_model, do_lower_case=args.do_lower_case)
 
-    global best_bleu4, epochs_since_improvement, checkpoint, start_epoch, fine_tune_encoder
-    start_epoch = args.start_epoch
-    epochs = args.epochs
-    epochs_since_improvement = args.epochs_since_improvement
-    best_bleu4 = args.best_bleu4
-    checkpoint = args.checkpoint
-            
+    """
+    Training and validation from sgr- mainly 
+    """
+    global best_bleu4, epochs_since_improvement, checkpoint, start_epoch, fine_tune_encoder, word_map
+    
+    # decoder model settings 
     if checkpoint is None:
+
         # Load pre-trained model (weights)
-        BertForDecoder = BertModel.from_pretrained(args.bert_model).to(args.device)
+        BertForDecoder = BertModel.from_pretrained(args.bert_model).to(device)
         BertForDecoder.eval()
-        decoder = DecoderWithBertEmbedding(vocab_size=30522,use_glove=False, use_bert=True, tokenizer=tokenizer, BertModel=BertForDecoder)
-        decoder_optimizer = torch.optim.Adam(params=filter(lambda p: p.requires_grad, decoder.parameters()),
-                                             lr=args.decoder_lr)
+
+        decoder = DecoderWithBertEmbedding(vocab_size=30522, use_glove=False, use_bert=True, tokenizer=tokenizer, BertModel=BertForDecoder)
+        decoder_optimizer = torch.optim.Adam(params=filter(lambda p: p.requires_grad, decoder.parameters()),lr=decoder_lr)
         # encoder.fine_tune(fine_tune_encoder)
         encoder_optimizer = torch.optim.Adam(params=filter(lambda p: p.requires_grad, encoder.parameters()),
-                                             lr=args.encoder_lr) if args.fine_tune_encoder else None
+                                             lr=encoder_lr) if fine_tune_encoder else None
     else: 
         logger.info(f"Loaded from checkpoint: {checkpoint}")
-        checkpoint = torch.load(PATH + 'checkpoints/' + checkpoint, map_location=str(args.device))
+        checkpoint = torch.load(args.datapth + 'checkpoints/' + checkpoint, map_location=str(device))
         start_epoch = checkpoint['epoch'] + 1
         epochs_since_improvement = checkpoint['epochs_since_improvement']
         best_bleu4 = checkpoint['bleu-4']
@@ -158,60 +188,58 @@ def main():
         decoder_optimizer = checkpoint['decoder_optimizer']
         encoder = checkpoint['encoder']
         encoder_optimizer = checkpoint['encoder_optimizer']
-        if args. fine_tune_encoder is True and encoder_optimizer is None:
+        if fine_tune_encoder is True and encoder_optimizer is None:
             # encoder.fine_tune(fine_tune_encoder)
             encoder_optimizer = torch.optim.Adam(params=filter(lambda p: p.requires_grad, encoder.parameters()),
-                                                 lr=args.encoder_lr)
+                                                 lr=encoder_lr)
     
     n_gpu = torch.cuda.device_count()
-    # if n_gpu>0:
-    #     torch.cuda.manual_seed_all(args.seed)
 
-    logger.info(
-        "device: {} n_gpu: {}".format(
-            args.device, n_gpu
-        )
-    )
-
-    if n_gpu>1:
-        encoder = nn.DataParallel(encoder,device_ids = [4,5,6,7])
-        decoder = nn.DataParallel(decoder,device_ids = [4,5,6,7])
-    # Move to GPU, if available
-    decoder = decoder.to(args.device)
-    encoder = encoder.to(args.device)
+    if n_gpu > 1 and args.multi_gpu : 
+        print(f"=> Use {n_gpu} GPUs! ")
+        decoder = nn.DataParallel(decoder, device_ids=list(range(n_gpu)))
+        decoder.to(f'cuda:{list(range(n_gpu))[0]}')
+        encoder = nn.DataParallel(encoder, device_ids=list(range(n_gpu)))        
+        encoder.to(f'cuda:{list(range(n_gpu))[0]}')
+    else : 
+        decoder = decoder.to(device)
+        encoder = encoder.to(device)
 
     encoder.eval()
 
-    criterion = nn.CrossEntropyLoss().to(args.device)
+    # Loss function
+    criterion = nn.CrossEntropyLoss().to(device)
 
+    """ DATA LOADER """
     # Custom dataloaders
     train_loader = torch.utils.data.DataLoader(
         ContextCaptionDataset(
             "TASK19",
-            dataroot=PATH,
-            annotations_jsonpath= PATH + 'jsonlines/' + args.train + '.jsonline',
+            dataroot=args.datapath,
+            annotations_jsonpath= args.datapath + 'jsonlines/' + args.train_data + '.jsonlines',
             split='train',
-            features_h5path1 = PATH + 'lmdbs/' + args.train,
+            features_h5path1 = args.datapath + 'lmdbs/' + args.train_data + ".lmdb",
             features_h5path2 = '', 
             tokenizer=tokenizer,
             bert_model=args.bert_model,
             ),
-        batch_size=args.batch_size, shuffle=True, num_workers=args.workers, pin_memory=True)
+        batch_size=batch_size, shuffle=True, num_workers=args.num_workers, pin_memory=True)
     val_loader = torch.utils.data.DataLoader(
         ContextCaptionDataset(
             "TASK19",
-            dataroot=PATH,
-            annotations_jsonpath= PATH + 'jsonlines/' + args.val + '.jsonline',
+            dataroot=args.datapath,
+            annotations_jsonpath= args.datapath + 'jsonlines/' + args.val_data + '.jsonlines',
             split='val',
-            features_h5path1 = PATH + 'lmdbs/' + args.val,
+            features_h5path1 = args.datapath + 'lmdbs/' + args.val_data + ".lmdb",
             features_h5path2 = '',
             tokenizer=tokenizer,
             bert_model=args.bert_model,
             ),
-        batch_size=args.batch_size, shuffle=True, num_workers=args.workers, pin_memory=True)
-
+        batch_size=batch_size, shuffle=True, num_workers=args.num_workers, pin_memory=True)
+    
+    logger.info("device: {} n_gpu: {}".format(device, n_gpu))
     logger.info("***** Running training *****")
-    logger.info("  Batch size = %d", args.batch_size)
+    logger.info("  Batch size = %d", batch_size)
     logger.info("  Num steps = %d", epochs)
 
     logger.info("*****Total Number of Parameters*****")
@@ -222,7 +250,7 @@ def main():
     for epoch in range(start_epoch, epochs):
         if epochs_since_improvement > 0 and epochs_since_improvement % 8 == 0:
             adjust_learning_rate(decoder_optimizer, 0.8)
-            if args.fine_tune_encoder:
+            if fine_tune_encoder:
                 adjust_learning_rate(encoder_optimizer, 0.8)
 
         # One epoch's training
@@ -251,7 +279,7 @@ def main():
             epochs_since_improvement = 0
 
         # Save checkpoint
-        save_checkpoint(args.save_name, epoch, epochs_since_improvement, encoder, decoder, encoder_optimizer,
+        save_checkpoint(args.train_data, epoch, epochs_since_improvement, encoder, decoder, encoder_optimizer,
                         decoder_optimizer, recent_bleu4, is_best)
 
 
@@ -267,7 +295,6 @@ def train(train_loader, encoder, decoder, criterion, encoder_optimizer, decoder_
     :param decoder_optimizer: optimizer to update decoder's weights
     :param epoch: epoch number
     """
-    args = get_args()
 
     decoder.train()  # train mode (dropout and batchnorm is used)
     # encoder.train()
@@ -290,19 +317,20 @@ def train(train_loader, encoder, decoder, criterion, encoder_optimizer, decoder_
                         batch
         ) 
 
+        batch_size = features.size(0)
         task_tokens = context.new().resize_(context.size(0), 1).fill_(19)
 
         data_time.update(time.time() - start)
 
         # Move to GPU, if available
-        context = context.to(args.device)
-        features = features.to(args.device)
-        spatials = spatials.to(args.device)
-        segment_ids = segment_ids.to(args.device)
-        input_mask = input_mask.to(args.device)
-        image_mask = image_mask.to(args.device)
-        co_attention_mask = co_attention_mask.to(args.device)
-        task_tokens = task_tokens.to(args.device)
+        context = context.to(device)
+        features = features.to(device)
+        spatials = spatials.to(device)
+        segment_ids = segment_ids.to(device)
+        input_mask = input_mask.to(device)
+        image_mask = image_mask.to(device)
+        co_attention_mask = co_attention_mask.to(device)
+        task_tokens = task_tokens.to(device)
         # Forward prop.
         _, _, _, _, _, _, _, _, _, _, pooled_output = encoder(
             context, # input txt
@@ -315,8 +343,8 @@ def train(train_loader, encoder, decoder, criterion, encoder_optimizer, decoder_
             task_tokens, # default = None
         )
 
-        pooled_output = pooled_output.to(args.device)
-        caption = caption.to(args.device)
+        pooled_output = pooled_output.to(device)
+        caption = caption.to(device)
         # caplens = (torch.tensor([32,len(caption)])).to(device)
         # scores, caps_sorted, decode_lengths, alphas, sort_ind = decoder(pooled_output, caption, caplens)
         scores, caps_sorted, decode_lengths, alphas = decoder(pooled_output, caption, caplens)
@@ -330,10 +358,10 @@ def train(train_loader, encoder, decoder, criterion, encoder_optimizer, decoder_
         targets, _, _, _ = pack_padded_sequence(targets, decode_lengths, batch_first=True)
 
         # Calculate loss
-        loss = criterion(scores, targets).to(args.device) # .to(device)
+        loss = criterion(scores, targets).to(device) # .to(device)
 
         # Add doubly stochastic attention regularization
-        loss += args.alpha_c * ((1. - alphas.sum(dim=1)) ** 2).mean()
+        loss += alpha_c * ((1. - alphas.sum(dim=1)) ** 2).mean()
 
         # Back prop.
         decoder_optimizer.zero_grad()
@@ -342,10 +370,10 @@ def train(train_loader, encoder, decoder, criterion, encoder_optimizer, decoder_
         loss.backward()
 
         # Clip gradients
-        if args.grad_clip is not None:
-            clip_gradient(decoder_optimizer, args.grad_clip)
+        if grad_clip is not None:
+            clip_gradient(decoder_optimizer, grad_clip)
             if encoder_optimizer is not None:
-                clip_gradient(encoder_optimizer, args.grad_clip)
+                clip_gradient(encoder_optimizer, grad_clip)
 
         # Update weights
         decoder_optimizer.step()
@@ -361,12 +389,12 @@ def train(train_loader, encoder, decoder, criterion, encoder_optimizer, decoder_
         start = time.time()
         
         # Print status
-        if i % args.print_freq == 0:
+        if i % print_freq == 0:
             print(f"Epoch: [{epoch}][{i}/{len(train_loader)}]")
             print(f"Batch Time {batch_time.val:.3f} ({batch_time.avg:.3f})")
             print(f"Data Load Time {data_time.val:.3f} ({data_time.avg:.3f})")
             print(f"Loss {float(losses.val):.4f} ({float(losses.avg):.4f})")
-            print(f"Top-5 Accuracy {float(top5accs.val):.3f} ({float(top5accs.avg):.3f})")       
+            print(f"Top-5 Accuracy {float(top5accs.val):.3f} ({float(top5accs.avg):.3f})\n")       
                                                                 
 def validate(val_loader, encoder, decoder, criterion, tokenizer):
     """
@@ -378,9 +406,6 @@ def validate(val_loader, encoder, decoder, criterion, tokenizer):
     :param criterion: loss layer
     :return: BLEU-4 score
     """
-
-    args = get_args()
-
     decoder.eval()  # eval mode (no dropout or batchnorm)
     if encoder is not None:
         encoder.eval()
@@ -391,6 +416,7 @@ def validate(val_loader, encoder, decoder, criterion, tokenizer):
 
     start = time.time()
     
+    test_references = list() #TODO: 안씀
     references = list()  # references (true captions) for calculating BLEU-4 score
     hypothesis = list()  # hypothesis (predictions)
 
@@ -408,14 +434,14 @@ def validate(val_loader, encoder, decoder, criterion, tokenizer):
 
             
             # Move to GPU, if available
-            context = context.to(args.device)
-            features = features.to(args.device)
-            spatials = spatials.to(args.device)
-            segment_ids = segment_ids.to(args.device)
-            input_mask = input_mask.to(args.device)
-            image_mask = image_mask.to(args.device)
-            co_attention_mask = co_attention_mask.to(args.device)
-            task_tokens = task_tokens.to(args.device)
+            context = context.to(device)
+            features = features.to(device)
+            spatials = spatials.to(device)
+            segment_ids = segment_ids.to(device)
+            input_mask = input_mask.to(device)
+            image_mask = image_mask.to(device)
+            co_attention_mask = co_attention_mask.to(device)
+            task_tokens = task_tokens.to(device)
 
             # Forward prop.
             _, _, _, _, _, _, _, _, _, _, pooled_output = encoder(
@@ -429,8 +455,8 @@ def validate(val_loader, encoder, decoder, criterion, tokenizer):
                 task_tokens,
             )
             
-            pooled_output = pooled_output.to(args.device)
-            caption = caption.to(args.device)
+            pooled_output = pooled_output.to(device)
+            caption = caption.to(device)
             # caplans = ~
             scores, caps_sorted, decode_lengths, alphas = decoder(pooled_output, caption, caplens)
             
@@ -448,7 +474,7 @@ def validate(val_loader, encoder, decoder, criterion, tokenizer):
             loss = criterion(scores_packed, targets_packed)
 
             # Add doubly stochastic attention regularization
-            loss += args.alpha_c * ((1. - alphas.sum(dim=1)) ** 2).mean()
+            loss += alpha_c * ((1. - alphas.sum(dim=1)) ** 2).mean()
 
             # Keep track of metrics
             losses.update(loss.item(), sum(decode_lengths))
@@ -458,18 +484,21 @@ def validate(val_loader, encoder, decoder, criterion, tokenizer):
 
             start = time.time()
 
-            if i % args.print_freq == 0:
+            if i % print_freq == 0:
                 print('Validation: [{0}/{1}]\t'
                       'Batch Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
                       'Loss {loss_val:.4f} ({loss_avg:.4f})\t'
                       'Top-5 Accuracy {top5_val:.3f} ({top5_avg:.3f})\t'.format(i, len(val_loader), batch_time=batch_time,                                                          loss_val = float(losses.val), loss_avg = float(losses.avg), top5_val = float(top5accs.val), top5_avg=float(top5accs.avg)))    
             
              # References
-            for j in range(targets.shape[0]):
+            for j in range(targets.shape[0]): # 32? 
                 img_caps = targets[j].tolist() # validation dataset only has 1 unique caption per img
                 img_caps = tokenizer.convert_ids_to_tokens(img_caps) # th) it has to be a one sentence
+                # print(f"img_caps check! is it a sentence ? \n{img_caps}")
                 clean_cap = [w for w in img_caps if w not in ["[PAD]","[CLS]","[SEP]"]]  # remove pad, start, and end # clean function
-                references.append(clean_cap) 
+                img_captions = list(map(lambda c: clean_cap,img_caps)) # th) img_captions has to be a one clean sentence. 
+                test_references.append(clean_cap) # 
+                references.append(img_captions) 
             
             # hypothesis
             # preds.shape torch.Size([32, 29])
@@ -488,7 +517,7 @@ def validate(val_loader, encoder, decoder, criterion, tokenizer):
                 # pred = p[:decode_lengths[j]] # decode_lenths is from decoder's 3rd output, like ... 29? 30? 
                 pred = p[:decode_lengths[j]]
                 pred = [w for w in pred if w not in ["[PAD]", "[CLS]","[SEP]"]]
-                hypothesis.append(pred)  # remove pads, start, and end
+                hypothesis.append(' '.join(pred))  # remove pads, start, and end
 
             assert len(references) == len(hypothesis)
         
@@ -500,10 +529,13 @@ def validate(val_loader, encoder, decoder, criterion, tokenizer):
                 loss_avg=float(losses.avg),
                 top5_avg=float(top5accs.avg),
                 bleu=bleu4))
-        for r,h in zip(references,hypothesis):
-            logger.info(' '.join(r)+ '\n' + ' '.join(h) + '\n')
-        logger.info("*****Validation Done*****")
+        # print(f"references : {references}")
+        # print(f"hypothesis : {hypothesis}")
+
     return bleu4
+
+def count_parameters(model):
+    return sum(p.numel() for p in model.parameters() if p.requires_grad)
 
 if __name__ == '__main__':
     main()

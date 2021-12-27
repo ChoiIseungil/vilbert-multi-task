@@ -16,9 +16,11 @@ from datasets import ContextCaptionDataset
 from utils import accuracy, AverageMeter
 from nltk.translate.bleu_score import corpus_bleu
 
+from datetime import datetime
+
 import os
 os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
-os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+os.environ["CUDA_VISIBLE_DEVICES"] = "7"
 
 PATH = '/mnt/nas2/seungil/'  # folder with data files saved by create_input_files.py
 
@@ -62,8 +64,7 @@ def main():
     )
     parser.add_argument(
         "-d",
-        required = True,
-        default = "FA", #1.66GB
+        default = "test", #1.66GB
         type = str,
         help = "test data"
     )
@@ -97,13 +98,18 @@ def main():
     )
     parser.add_argument(
         "--checkpoint",
-        default = "BEST_checkpoint_FA.pth.tar", #1.66GB
+        default = "BEST_checkpoint_train.pth.tar", #1.66GB
         type = str,
+    )
+    parser.add_argument(
+        "--out",
+        default="out.txt", 
+        type=str
     )
 
     args = parser.parse_args()
 
-    global alpha_c, message, checkpoint_name, data_name
+    global alpha_c, message, checkpoint_name, data_name, epoch
     alpha_c = args.alpha_c
     message = args.m
     checkpoint_name = args.checkpoint
@@ -127,6 +133,9 @@ def main():
     checkpoint = torch.load(PATH + 'checkpoints/' + checkpoint_name, map_location=str(device))
     decoder = checkpoint['decoder']
     encoder = checkpoint['encoder']
+    epoch = checkpoint['epoch']
+
+    print(f"This model's epoch : {epoch}")
 
     n_gpu = torch.cuda.device_count()
     if n_gpu>0:
@@ -159,9 +168,9 @@ def main():
         ContextCaptionDataset(
             "TASK19",
             dataroot=PATH,
-            annotations_jsonpath= PATH + 'jsonlines/' + args.d + '.jsonline',
+            annotations_jsonpath= PATH + 'jsonlines/' + args.d + '.jsonlines',
             split='test',
-            features_h5path1 = PATH + 'lmdbs/' + args.d,
+            features_h5path1 = PATH + 'lmdbs/' + args.d + ".lmdb",
             features_h5path2 = '', 
             tokenizer=tokenizer,
             bert_model=args.bert_model,
@@ -169,14 +178,15 @@ def main():
         batch_size=args.batch_size, shuffle=True, num_workers=workers, pin_memory=True)
 
     # One epoch's validation
-    test(test_loader=test_loader,
+    test(args,
+            test_loader=test_loader,
             encoder=encoder,
             decoder=decoder,
             criterion=criterion,
             tokenizer=tokenizer)
 
                                                                 
-def test(test_loader, encoder, decoder, criterion, tokenizer):
+def test(args, test_loader, encoder, decoder, criterion, tokenizer):
     """
     Performs one epoch's validation.
 
@@ -303,8 +313,10 @@ def test(test_loader, encoder, decoder, criterion, tokenizer):
                 bleu=bleu4)
         # Writing results in tests/
         
-        f = open(PATH + 'tests/'+ checkpoint_name + '_on_' +  data_name + '.txt','w')
-        f.write(checkpoint_name + ' tested on ' +  data_name + '\n')
+        f = open(PATH + 'tests/'+ args.out,'w')
+        f.write(f"TIME : {datetime.now()}\n")
+        f.write(f"checkpoint file : {checkpoint_name}\ttest data : {data_name}\n")
+        f.write(f"epoch {epoch} model\n")
         f.write(message+'\n')
         f.write(stats+'\n')
         for r,h in zip(references,hypothesis):

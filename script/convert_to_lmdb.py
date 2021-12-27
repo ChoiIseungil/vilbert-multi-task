@@ -31,7 +31,7 @@ def get_parser():
     parser.add_argument(
         "--out", 
         required = True,
-        default = None, 
+        default = 'train.lmdb', 
         type = str, 
         help = "Path to extracted features file"
     )
@@ -41,10 +41,10 @@ def main():
     args = get_parser().parse_args()
     infiles = []
     id_list = []
-    for file in args.data.split(','):
+    for file in args.data.split('-'):
         infiles.extend(glob.glob(os.path.join(PATH + 'features/' + file, "*")))
 
-    env = lmdb.open(PATH + 'lmdbs/' + args.out + '/', map_size=MAP_SIZE)
+    env = lmdb.open(PATH + 'lmdbs/' + args.out , map_size=MAP_SIZE)
 
     with env.begin(write=True) as txn:
         for infile in tqdm.tqdm(infiles):
