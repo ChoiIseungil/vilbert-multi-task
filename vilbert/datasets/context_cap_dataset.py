@@ -66,7 +66,7 @@ def _load_annotations(split, annotations_jsonpath, task, dataroot, clean_dataset
     return entries, imgid2entry
 
 
-class ContextCaptionDataset(Dataset):
+class ContextCaptionDataset___(Dataset):
     def __init__(
         self,
         task: str,
@@ -327,7 +327,7 @@ def _load_annotationsVal(annotations_jsonpath, task):
     return image_entries, caption_entries
 
 
-class ContextCaptionDatasetVal(Dataset):
+class ContextCaptionDatasetVal___(Dataset):
     def __init__(
         self,
         task: str,

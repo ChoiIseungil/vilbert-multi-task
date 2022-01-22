@@ -92,7 +92,7 @@ class DecoderWithAttention(nn.Module):
     Decoder.
     """
 
-    def __init__(self, attention_dim, embed_dim, decoder_dim, vocab_size, encoder_dim=2048, dropout=0.5):
+    def __init__(self, attention_dim, embed_dim, decoder_dim, vocab_size, encoder_dim=1024, dropout=0.5):
         """
         :param attention_dim: size of attention network
         :param embed_dim: embedding size
@@ -212,7 +212,7 @@ class DecoderWithAttention(nn.Module):
             predictions[:batch_size_t, t, :] = preds # [batch_size, t-th, vocab_size(30522)]
             alphas[:batch_size_t, t, :] = alpha
 
-        return predictions, encoded_captions, decode_lengths, alphas, sort_ind
+        return predictions, encoded_captions, decode_lengths, alphas #, sort_ind
 
 class DecoderWithBertEmbedding(nn.Module):
 

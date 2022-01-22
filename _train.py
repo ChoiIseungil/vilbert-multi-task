@@ -18,7 +18,6 @@ from utils import save_checkpoint, adjust_learning_rate, accuracy, count_paramet
 from nltk.translate.bleu_score import corpus_bleu
 
 import os
-
 #################### from sgr ###################
 
 # Model parameters
@@ -34,7 +33,6 @@ cudnn.benchmark = True  # set to true only if inputs to model are fixed size; ot
 start_epoch = 0
 epochs = 120  # number of epochs to train for (if early stopping is not triggered)
 epochs_since_improvement = 0  # keeps track of number of epochs since there's been an improvement in validation BLEU
-batch_size = 4
 # workers = 1  # for data-loading; right now, only 1 works with h5py
 encoder_lr = 1e-4  # learning rate for encoder if fine-tuning
 decoder_lr = 4e-3  # learning rate for decoder #4e-4
@@ -42,8 +40,7 @@ grad_clip = 5.  # clip gradients at an absolute value of
 alpha_c = 1.  # regularization parameter for 'doubly stochastic attention', as in the paper
 best_bleu4 = 0.  # BLEU-4 score right now
 print_freq = 100  # print training/validation stats every __ batches
-fine_tune_encoder = True  # fine-tune encoder?
-checkpoint = None #"BEST_checkpoint_FA_dataset.pth.tar" 
+fine_tune_encoder = True
 ##################################################
 
 
@@ -90,7 +87,7 @@ def get_parser():
     parser.add_argument("--tasks,", type=str, default='19')
     parser.add_argument("--save_name", type=str, default='')
     parser.add_argument("--in_memory", type=bool, default=False)
-    parser.add_argument("--batch_size", type=int, default=1)
+    parser.add_argument("--batch_size", type=int, default=4)
     parser.add_argument("--local_rank", type=int, default=-1)
     parser.add_argument("--split", type=str, default='mteval')
     parser.add_argument("--clean_train_sets", type=bool, default=True)
@@ -103,16 +100,28 @@ def get_parser():
     # gpu settings
     parser.add_argument("--multi_gpu", type=bool, default=False)
     parser.add_argument("--gpu_num", type=int, default=7)
+
+    # checkpoint
+    parser.add_argument("--checkpoint", type=str, default='', help="if a ckpt dose exist, enter the specific path.")
+
+    # training settings 
+    parser.add_argument("--fine_tune_encoder",type=bool,default=True)
     return parser
+
+    # Training parameters
 
 def main():
 
+    global best_bleu4, epochs_since_improvement, checkpoint, start_epoch, fine_tune_encoder #, word_map
+
     parser = get_parser()
     args = parser.parse_args()
-    print(args)
+    print(args,'\n')
+
+    fine_tune_encoder = args.fine_tune_encoder 
 
     """
-    ViLBERT MODEL settings (ENCODER)
+    vilBERT MODEL settings (ENCODER)
     """
 
     if args.baseline:
@@ -162,50 +171,48 @@ def main():
     tokenizer = BertTokenizer.from_pretrained(args.bert_model, do_lower_case=args.do_lower_case)
 
     """
-    Training and validation from sgr- mainly 
+    Training and validation  
     """
-    global best_bleu4, epochs_since_improvement, checkpoint, start_epoch, fine_tune_encoder, word_map
+    
     
     # decoder model settings 
-    if checkpoint is None:
+    if not args.checkpoint : 
 
         # Load pre-trained model (weights)
         BertForDecoder = BertModel.from_pretrained(args.bert_model).to(device)
         BertForDecoder.eval()
-
         decoder = DecoderWithBertEmbedding(vocab_size=30522, use_glove=False, use_bert=True, tokenizer=tokenizer, BertModel=BertForDecoder)
         decoder_optimizer = torch.optim.Adam(params=filter(lambda p: p.requires_grad, decoder.parameters()),lr=decoder_lr)
-        # encoder.fine_tune(fine_tune_encoder)
+        
         encoder_optimizer = torch.optim.Adam(params=filter(lambda p: p.requires_grad, encoder.parameters()),
                                              lr=encoder_lr) if fine_tune_encoder else None
     else: 
         logger.info(f"Loaded from checkpoint: {checkpoint}")
         checkpoint = torch.load(args.datapth + 'checkpoints/' + checkpoint, map_location=str(device))
+        
         start_epoch = checkpoint['epoch'] + 1
         epochs_since_improvement = checkpoint['epochs_since_improvement']
         best_bleu4 = checkpoint['bleu-4']
+
         decoder = checkpoint['decoder']
         decoder_optimizer = checkpoint['decoder_optimizer']
         encoder = checkpoint['encoder']
         encoder_optimizer = checkpoint['encoder_optimizer']
-        if fine_tune_encoder is True and encoder_optimizer is None:
-            # encoder.fine_tune(fine_tune_encoder)
-            encoder_optimizer = torch.optim.Adam(params=filter(lambda p: p.requires_grad, encoder.parameters()),
-                                                 lr=encoder_lr)
+        
+        if fine_tune_encoder : encoder_optimizer = torch.optim.Adam(params=filter(lambda p: p.requires_grad, encoder.parameters()), lr=encoder_lr)
     
     n_gpu = torch.cuda.device_count()
-
     if n_gpu > 1 and args.multi_gpu : 
-        print(f"=> Use {n_gpu} GPUs! ")
+        
         decoder = nn.DataParallel(decoder, device_ids=list(range(n_gpu)))
         decoder.to(f'cuda:{list(range(n_gpu))[0]}')
         encoder = nn.DataParallel(encoder, device_ids=list(range(n_gpu)))        
         encoder.to(f'cuda:{list(range(n_gpu))[0]}')
+        print(f"=> Use {n_gpu} GPUs! ")
     else : 
         decoder = decoder.to(device)
         encoder = encoder.to(device)
-
-    encoder.eval()
+        print(f"=> Use only 1 GPU.")
 
     # Loss function
     criterion = nn.CrossEntropyLoss().to(device)
@@ -223,7 +230,7 @@ def main():
             tokenizer=tokenizer,
             bert_model=args.bert_model,
             ),
-        batch_size=batch_size, shuffle=True, num_workers=args.num_workers, pin_memory=True)
+        batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers, pin_memory=True)
     val_loader = torch.utils.data.DataLoader(
         ContextCaptionDataset(
             "TASK19",
@@ -235,11 +242,11 @@ def main():
             tokenizer=tokenizer,
             bert_model=args.bert_model,
             ),
-        batch_size=batch_size, shuffle=True, num_workers=args.num_workers, pin_memory=True)
+        batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers, pin_memory=True)
     
     logger.info("device: {} n_gpu: {}".format(device, n_gpu))
     logger.info("***** Running training *****")
-    logger.info("  Batch size = %d", batch_size)
+    logger.info("  Batch size = %d", args.batch_size)
     logger.info("  Num steps = %d", epochs)
 
     logger.info("*****Total Number of Parameters*****")
@@ -250,8 +257,7 @@ def main():
     for epoch in range(start_epoch, epochs):
         if epochs_since_improvement > 0 and epochs_since_improvement % 8 == 0:
             adjust_learning_rate(decoder_optimizer, 0.8)
-            if fine_tune_encoder:
-                adjust_learning_rate(encoder_optimizer, 0.8)
+            if fine_tune_encoder: adjust_learning_rate(encoder_optimizer, 0.8)
 
         # One epoch's training
         train(train_loader=train_loader,
@@ -260,7 +266,8 @@ def main():
               criterion=criterion,
               encoder_optimizer=encoder_optimizer,
               decoder_optimizer=decoder_optimizer,
-              epoch=epoch)
+              epoch=epoch,
+              tokenizer=tokenizer)
 
         # One epoch's validation
         recent_bleu4 = validate(val_loader=val_loader,
@@ -283,7 +290,7 @@ def main():
                         decoder_optimizer, recent_bleu4, is_best)
 
 
-def train(train_loader, encoder, decoder, criterion, encoder_optimizer, decoder_optimizer, epoch):
+def train(train_loader, encoder, decoder, criterion, encoder_optimizer, decoder_optimizer, epoch, tokenizer):
     """
     Performs one epoch's training.
 
@@ -297,7 +304,7 @@ def train(train_loader, encoder, decoder, criterion, encoder_optimizer, decoder_
     """
 
     decoder.train()  # train mode (dropout and batchnorm is used)
-    # encoder.train()
+    encoder.train()
 
     batch_time = AverageMeter()  # forward prop. + back prop. time
     data_time = AverageMeter()  # data loading time
@@ -308,15 +315,12 @@ def train(train_loader, encoder, decoder, criterion, encoder_optimizer, decoder_
 
     # Batches
     for i, batch in enumerate(train_loader):
-        # features, spatials, image_mask, question, target, input_mask, segment_ids, co_attention_mask, question_id = (
-        #                 batch
-        # ) 
+        features, spatials, image_mask, context, caption, input_mask, segment_ids, co_attention_mask, image_id, caplens = (batch) 
+        # if i == 0 :
+            # print(f"I just wonder ::: ")
+            # print(f"context : {context.shape}")
+            # print(f"caption  :{caption.shape}")
         
-        # I think this version is more appropriate, right? 
-        features, spatials, image_mask, context, caption, input_mask, segment_ids, co_attention_mask, image_id, caplens = (
-                        batch
-        ) 
-
         batch_size = features.size(0)
         task_tokens = context.new().resize_(context.size(0), 1).fill_(19)
 
@@ -352,41 +356,52 @@ def train(train_loader, encoder, decoder, criterion, encoder_optimizer, decoder_
         # Since we decoded starting with <start>, the targets are all words after <start>, up to <end>
         targets = caps_sorted[:, 1:]
 
+        # print(f"scoers before packed : {scores.shape}")
+        # print(f"targets before packed : {targets.shape}")
+        # scoers before packed : torch.Size([4, 29, 30522])
+        # targets before packed : torch.Size([4, 29])
+
         # Remove timesteps that we didn't decode at, or are pads
         # pack_padded_sequence is an easy trick to do this
-        scores, _, _, _ = pack_padded_sequence(scores, decode_lengths, batch_first=True)
-        targets, _, _, _ = pack_padded_sequence(targets, decode_lengths, batch_first=True)
+        scores_packed, _, _, _ = pack_padded_sequence(scores, decode_lengths, batch_first=True)
+        targets_packed, _, _, _ = pack_padded_sequence(targets, decode_lengths, batch_first=True)
+
+        # print(f"scoers after packed : {scores_packed.shape}")
+        # print(f"targets after packed : {targets_packed.shape}")
+        # scoers after packed : torch.Size([116, 30522]) <= [4*29, 30522]
+        # targets after packed : torch.Size([116]) <=[4*29]
 
         # Calculate loss
-        loss = criterion(scores, targets).to(device) # .to(device)
+        loss = criterion(scores_packed, targets_packed).to(device) # .to(device)
 
         # Add doubly stochastic attention regularization
         loss += alpha_c * ((1. - alphas.sum(dim=1)) ** 2).mean()
 
         # Back prop.
         decoder_optimizer.zero_grad()
-        if encoder_optimizer is not None:
-            encoder_optimizer.zero_grad()
+        if fine_tune_encoder : encoder_optimizer.zero_grad()
         loss.backward()
 
         # Clip gradients
         if grad_clip is not None:
             clip_gradient(decoder_optimizer, grad_clip)
-            if encoder_optimizer is not None:
-                clip_gradient(encoder_optimizer, grad_clip)
+            if fine_tune_encoder : clip_gradient(encoder_optimizer, grad_clip)
 
         # Update weights
         decoder_optimizer.step()
-        if encoder_optimizer is not None:
-            encoder_optimizer.step()
+        if fine_tune_encoder : encoder_optimizer.step()
 
         # Keep track of metrics
-        top5 = accuracy(scores, targets, 5)
+        top5 = accuracy(scores_packed, targets_packed, 5)
         losses.update(loss.item(), sum(decode_lengths))
         top5accs.update(top5, sum(decode_lengths))
         batch_time.update(time.time() - start)
 
         start = time.time()
+
+
+        references = list()  # references (true captions) for calculating BLEU-4 score
+        hypothesis = list()  # hypothesis (predictions)
         
         # Print status
         if i % print_freq == 0:
@@ -394,7 +409,51 @@ def train(train_loader, encoder, decoder, criterion, encoder_optimizer, decoder_
             print(f"Batch Time {batch_time.val:.3f} ({batch_time.avg:.3f})")
             print(f"Data Load Time {data_time.val:.3f} ({data_time.avg:.3f})")
             print(f"Loss {float(losses.val):.4f} ({float(losses.avg):.4f})")
-            print(f"Top-5 Accuracy {float(top5accs.val):.3f} ({float(top5accs.avg):.3f})\n")       
+            print(f"Top-5 Accuracy {float(top5accs.val):.3f} ({float(top5accs.avg):.3f})\n")   
+
+            
+            # references
+            for j in range(targets.shape[0]): # 32? 
+                img_caps = targets[j].tolist() # validation dataset only has 1 unique caption per img
+                img_caps = tokenizer.convert_ids_to_tokens(img_caps) # th) it has to be a one sentence
+                # print(f"img_caps check! is it a sentence ? \n{img_caps}")
+                clean_cap = [w for w in img_caps if w not in ["[PAD]","[CLS]","[SEP]"]]  # remove pad, start, and end # clean function
+                img_captions = list(map(lambda c: clean_cap, img_caps)) # th) img_captions has to be a one clean sentence. 
+                # print(f"clean cap : {clean_cap}")
+                # print(f"img_caption which is processed after clean cap : {img_captions}")
+                # references.append(img_captions) 
+                references.append(clean_cap)
+            
+            # hypothesis
+            # preds.shape torch.Size([32, 29])
+            _, preds = torch.max(scores, dim=2)  # return (values, index)
+                # _, preds ==> values, and index respectively 
+                # "dim =1" means it extracts 928 elements from 928 * 30522. that is, criterion is dim 1 which will be shrinked
+            # print(f"predicted logits : {preds}")
+            preds = preds.tolist() 
+            preds_token = []
+            for l in preds : 
+                preds_token.append(tokenizer.convert_ids_to_tokens(l))
+            
+            for j, p in enumerate(preds_token):
+                # print(f"iter : {j}, p in preds : {p}, p shape : {len(p)}")
+                # print(f"decode_lengths : {decode_lengths}, len : {len(decode_lengths)}")
+                # pred = p[:decode_lengths[j]] # decode_lenths is from decoder's 3rd output, like ... 29? 30? 
+                pred = p[:decode_lengths[j]]
+                pred = [w for w in pred if w not in ["[PAD]", "[CLS]","[SEP]"]]
+                hypothesis.append(' '.join(pred))  # remove pads, start, and end
+
+
+            assert len(references) == len(hypothesis)
+
+            print(f"references : {references}")
+            print(f"hypothesis : {hypothesis}")
+
+            bleu4 = corpus_bleu(references, hypothesis)
+
+            print(f"bleu4 : {bleu4}")
+
+
                                                                 
 def validate(val_loader, encoder, decoder, criterion, tokenizer):
     """
@@ -416,7 +475,6 @@ def validate(val_loader, encoder, decoder, criterion, tokenizer):
 
     start = time.time()
     
-    test_references = list() #TODO: 안씀
     references = list()  # references (true captions) for calculating BLEU-4 score
     hypothesis = list()  # hypothesis (predictions)
 
@@ -431,7 +489,6 @@ def validate(val_loader, encoder, decoder, criterion, tokenizer):
         ) 
 
             task_tokens = context.new().resize_(context.size(0), 1).fill_(19) 
-
             
             # Move to GPU, if available
             context = context.to(device)
@@ -466,9 +523,7 @@ def validate(val_loader, encoder, decoder, criterion, tokenizer):
 
             # Remove timesteps that we didn't decode at, or are pads
             # pack_padded_sequence is an easy trick to do this
-            scores_packed, _, _, _ = pack_padded_sequence(scores, decode_lengths, batch_first=True) 
-                            #[32, 29, 30522] , torch.Size([32]) <= [tensor([29]), .. , tensor([29])]  
-            
+            scores_packed, _, _, _ = pack_padded_sequence(scores, decode_lengths, batch_first=True) #[32, 29, 30522] , torch.Size([32]) <= [tensor([29]), .. , tensor([29])]  
             targets_packed, _, _, _ = pack_padded_sequence(targets, decode_lengths, batch_first=True)
 
             loss = criterion(scores_packed, targets_packed)
@@ -488,8 +543,9 @@ def validate(val_loader, encoder, decoder, criterion, tokenizer):
                 print('Validation: [{0}/{1}]\t'
                       'Batch Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
                       'Loss {loss_val:.4f} ({loss_avg:.4f})\t'
-                      'Top-5 Accuracy {top5_val:.3f} ({top5_avg:.3f})\t'.format(i, len(val_loader), batch_time=batch_time,                                                          loss_val = float(losses.val), loss_avg = float(losses.avg), top5_val = float(top5accs.val), top5_avg=float(top5accs.avg)))    
-            
+                      'Top-5 Accuracy {top5_val:.3f} ({top5_avg:.3f})\t'.format(i, len(val_loader), batch_time=batch_time,
+                                                                                loss_val = float(losses.val), loss_avg = float(losses.avg), top5_val = float(top5accs.val), top5_avg=float(top5accs.avg)))    
+
              # References
             for j in range(targets.shape[0]): # 32? 
                 img_caps = targets[j].tolist() # validation dataset only has 1 unique caption per img
@@ -497,29 +553,26 @@ def validate(val_loader, encoder, decoder, criterion, tokenizer):
                 # print(f"img_caps check! is it a sentence ? \n{img_caps}")
                 clean_cap = [w for w in img_caps if w not in ["[PAD]","[CLS]","[SEP]"]]  # remove pad, start, and end # clean function
                 img_captions = list(map(lambda c: clean_cap,img_caps)) # th) img_captions has to be a one clean sentence. 
-                test_references.append(clean_cap) # 
-                references.append(img_captions) 
+                references.append(clean_cap) 
             
             # hypothesis
             # preds.shape torch.Size([32, 29])
+            
             _, preds = torch.max(scores, dim=2)
-                # _, preds ==> values, and index respectively 
-                # "dim =1" means it extracts 928 elements from 928 * 30522. that is, criterion is dim 1 which will be shrinked
-            # print(f"predicted logits : {preds}")
             preds = preds.tolist() 
             preds_token = []
             for l in preds : 
                 preds_token.append(tokenizer.convert_ids_to_tokens(l))
             
             for j, p in enumerate(preds_token):
-                # print(f"iter : {j}, p in preds : {p}, p shape : {len(p)}")
-                # print(f"decode_lengths : {decode_lengths}, len : {len(decode_lengths)}")
-                # pred = p[:decode_lengths[j]] # decode_lenths is from decoder's 3rd output, like ... 29? 30? 
                 pred = p[:decode_lengths[j]]
                 pred = [w for w in pred if w not in ["[PAD]", "[CLS]","[SEP]"]]
                 hypothesis.append(' '.join(pred))  # remove pads, start, and end
 
             assert len(references) == len(hypothesis)
+
+            print(f"references : {references}")
+            print(f"hypothesis : {hypothesis}")
         
         # Calculate BLEU-4 scores
         bleu4 = corpus_bleu(references, hypothesis)

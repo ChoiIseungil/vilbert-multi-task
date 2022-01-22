@@ -25,7 +25,8 @@ from .concept_cap_dataset import (
 # from .guesswhat_pointing_dataset import GuessWhatPointingDataset
 # from .flickr_grounding_dataset import FlickrGroundingDataset
 # Above scripts are not needed for this project
-from .context_cap_dataset import ContextCaptionDataset, ContextCaptionDatasetVal
+# from .context_cap_dataset import ContextCaptionDataset, ContextCaptionDatasetVal
+from.contextual_caption_dataset import ContextCaptionDataset
 
 # from .flickr_retreival_dataset import FlickrRetreivalDatasetTrain, FlickrRetreivalDatasetVal
 __all__ = [
@@ -94,5 +95,5 @@ DatasetMapEval = {
     # "Visual7w": Visual7wPointingDataset,
     # "GuessWhatPointing": GuessWhatPointingDataset,
     # "FlickrGrounding": FlickrGroundingDataset,
-    "ContextCaption" : ContextCaptionDatasetVal
+    "ContextCaption" : ContextCaptionDataset
 }
