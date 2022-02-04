@@ -773,6 +773,12 @@ class BertBiAttention(nn.Module):
         attention_scores1 = torch.matmul(query_layer2, key_layer1.transpose(-1, -2))
         attention_scores1 = attention_scores1 / math.sqrt(self.attention_head_size)
 
+        # print("--- shape check in the BertBiAttention")
+        # print(f"attention score1 : {attention_scores1.shape}")
+        # print(f"attention mask1 : {attention_mask1.shape}")
+        # attention score1 : torch.Size([8, 8, 150, 101])
+        # attention mask1 : torch.Size([8, 1, 1, 150])
+
         attention_scores1 = attention_scores1 + attention_mask1
         # if use_co_attention_mask:
         # attention_scores1 = attention_scores1 + co_attention_mask.permute(0,1,3,2)
@@ -1739,3 +1745,98 @@ class SimpleClassifier(nn.Module):
 #     def forward(self, x):
 #         logits = self.main(x)
 #         return logits
+
+
+class VILBertEncoder(BertPreTrainedModel):
+    def __init__(self, config, num_labels, dropout_prob=0.1, default_gpu=True):
+        super(VILBertEncoder, self).__init__(config)
+        self.num_labels = num_labels
+
+        self.bert = BertModel(config)
+        self.dropout = nn.Dropout(dropout_prob)
+        self.cls = BertPreTrainingHeads(
+            config, self.bert.embeddings.word_embeddings.weight
+        )
+        self.vil_prediction = SimpleClassifier(
+            config.bi_hidden_size, config.bi_hidden_size * 2, 3129, 0.5
+        )
+        self.vil_prediction_gqa = SimpleClassifier(
+            config.bi_hidden_size, config.bi_hidden_size * 2, 1533, 0.5
+        )
+        self.vil_binary_prediction = SimpleClassifier(
+            config.bi_hidden_size * 2, config.bi_hidden_size * 2, 2, 0.5
+        )
+        self.vil_logit = nn.Linear(config.bi_hidden_size, 1)
+        self.vil_tri_prediction = nn.Linear(
+            config.bi_hidden_size, 3
+        )  # for Visual Entailiment tasks
+        self.vision_logit = nn.Linear(config.v_hidden_size, 1)
+        self.linguisic_logit = nn.Linear(config.hidden_size, 1)
+        self.fusion_method = config.fusion_method
+        self.apply(self.init_weights)
+
+        self.tie_weights()
+
+    def tie_weights(self):
+        """ Make sure we are sharing the input and output embeddings.
+            Export to TorchScript can't handle parameter sharing so we are cloning them instead.
+        """
+        self._tie_or_clone_weights(
+            self.cls.predictions.decoder, self.bert.embeddings.word_embeddings
+        )
+
+    def forward(
+        self,
+        input_txt,
+        input_imgs,
+        image_loc,
+        token_type_ids=None, 
+        attention_mask=None, # text attention mask? 
+        image_attention_mask=None, # imgae attentino mask
+        co_attention_mask=None, # co attention mask 
+        task_ids=None,
+        output_all_encoded_layers=False,
+        output_all_attention_masks=False,
+    ):
+
+        sequence_output_t, sequence_output_v, pooled_output_t, pooled_output_v, all_attention_mask = self.bert(
+            input_txt,
+            input_imgs,
+            image_loc,
+            token_type_ids,
+            attention_mask,
+            image_attention_mask,
+            co_attention_mask,
+            task_ids,
+            output_all_encoded_layers=output_all_encoded_layers,
+            output_all_attention_masks=output_all_attention_masks,
+        )
+
+        if self.fusion_method == "sum":
+            pooled_output = self.dropout(pooled_output_t + pooled_output_v)
+        elif self.fusion_method == "mul":
+            pooled_output = self.dropout(pooled_output_t * pooled_output_v)
+        else:
+            assert False
+
+        if pooled_output.size(0) % 2 == 0:
+            vil_binary_prediction = self.vil_binary_prediction(
+                pooled_output.view(-1, pooled_output.size(1) * 2)
+            )
+
+        # print("--- check encoder output size !!! --- ")
+        # print(f"seq output t : {sequence_output_t.shape}") # seq output t : torch.Size([8, 150, 768]) # [batch_size, max_seq_len, emb_dim]
+        # print(f"seq output v : {sequence_output_v.shape}") #  seq output v : torch.Size([8, 101, 768]) # [batch_size, max_region_num, emb_dim]
+        # print(f"pooled output t : {pooled_output_t.shape}") torch.Size([8, 1024])
+        # print(f"pooled output v : {pooled_output_v.shape}") torch.Size([8, 1024])
+        # print(f"pooled output ! : {pooled_output.shape}") torch.Size([8, 1024])
+        
+
+        return (
+            sequence_output_t,
+            sequence_output_v,
+            pooled_output_t,
+            pooled_output_v,
+            all_attention_mask,
+            pooled_output
+        )

@@ -9,6 +9,10 @@
 # Usage e.g.
 >>> python train_ContextualCaption.py --file_path [DATA PATH] --decoder_with_bert_emb [True] --gpu_num [GPUNUM which will be used]
 >>> python train_ContextualCaption.py --file_path /mnt/nas2/seungil/ --decoder_with_bert_emb True --gpu_num 7
+
+>>> python train_ContextualCaption.py --decoder_with_bert_emb False --gpu_num 6 --save_name LstmWithAttn
+# resume
+>>> python train_ContextualCaption.py --decoder_with_bert_emb False --gpu_num 7 --resume_file /mnt/nas2/seungil/save_ContextualCaption/bert_base_6layer_6conect/BEST_pytorch_ckpt_2.pth.tar
 """
 
 import argparse
@@ -40,16 +44,16 @@ from vilbert.datasets import ConceptCapLoaderTrain, ConceptCapLoaderVal
 from vilbert.vilbert import BertForMultiModalPreTraining, BertConfig
 import torch.distributed as dist
 
-from vilbert.datasets import ContextCaptionDataset
+from vilbert.datasets.contextual_caption_dataset import ContextCaptionDataset
 from models import DecoderWithAttention, DecoderWithBertEmbedding
 from nltk.translate.bleu_score import corpus_bleu
 from torch.nn.utils.rnn import pack_padded_sequence
 
 
-PAD = 0
-CLS = 101
-SEP = 102
-UNK = 100
+# PAD = 0
+# CLS = 101
+# SEP = 102
+# UNK = 100
 
 # os.environ["CUDA_VISIBLE_DEVICES"] = '4, 5, 6, 7'
 
@@ -60,6 +64,17 @@ logging.basicConfig(
     level=logging.INFO,
 )
 logger = logging.getLogger(__name__)
+
+
+def str2bool(v):
+    if isinstance(v, bool):
+        return v
+    if v.lower() in ('yes', 'true', 't', 'y', '1'):
+        return True
+    elif v.lower() in ('no', 'false', 'f', 'n', '0'):
+        return False
+    else:
+        raise argparse.ArgumentTypeError('Boolean value expected.')
 
 
 def main():
@@ -152,7 +167,7 @@ def main():
     )
     parser.add_argument(
         "--do_lower_case",
-        type=bool,
+        type=str2bool,
         default=True,
         help="Whether to lower case the input text. True for uncased models, False for cased models.",
     )
@@ -267,7 +282,7 @@ def main():
         "--gpu_num", default=7, type=int, help="GPU number which will be used"
     )
     parser.add_argument(
-        "--decoder_with_bert_emb", default=False, type=bool
+        "--decoder_with_bert_emb", default=False, type=str2bool
     )
 
     args = parser.parse_args()
@@ -283,7 +298,7 @@ def main():
         from vilbert.basebert import BaseBertForVLTasks
     else:
         from vilbert.vilbert import BertConfig
-        from vilbert.vilbert import VILBertForVLTasks
+        from vilbert.vilbert import VILBertForVLTasks, VILBertEncoder
 
     if args.save_name:
         prefix = "-" + args.save_name
@@ -364,7 +379,7 @@ def main():
 
     train_dataset = DataLoader(
         ContextCaptionDataset(
-            "TASK19",
+            task="TASK19",
             dataroot=args.file_path,
             annotations_jsonpath= args.file_path + 'jsonlines/' + "train" + '.jsonlines',
             split='train',
@@ -439,7 +454,7 @@ def main():
         )
     else:
         print("VILBert is loaded.")
-        model = VILBertForVLTasks.from_pretrained(
+        model = VILBertEncoder.from_pretrained(
             args.from_pretrained,
             config=config,
             num_labels=num_labels,
@@ -450,6 +465,7 @@ def main():
         BertForDecoder = BertModel.from_pretrained(args.bert_model).to(device)
         BertForDecoder.eval()
         decoder = DecoderWithBertEmbedding(vocab_size=30522, use_glove=False, use_bert=True, tokenizer=tokenizer, BertModel=BertForDecoder)
+        print("DecoderWithBertEmbedding is loaded.")
         
     else : 
         decoder = DecoderWithAttention(attention_dim=args.dec_attention_dim,
@@ -457,6 +473,7 @@ def main():
                                        decoder_dim=args.dec_decoder_dim,
                                        vocab_size=30522,
                                        dropout=args.dec_dropout)
+        print("DecoderWithAttention is loaded.")
 
 
     no_decay = ["bias", "LayerNorm.bias", "LayerNorm.weight"]
@@ -562,6 +579,7 @@ def main():
 
     startIterID = 0
     global_step = 0
+    epochs_since_improvement = 0
     start_epoch = int(args.start_epoch)
     best_bleu4 = float(args.best_bleu4)
 
@@ -582,6 +600,8 @@ def main():
         start_epoch = int(checkpoint["epoch_id"]) +1 
         best_bleu4 = float(checkpoint["best_bleu4"])
         decoder = checkpoint["decoder"]
+        epochs_since_improvement = 0
+        print(f"RESUME FILE IS LOADED!")
         del checkpoint
 
     # model.cuda()
@@ -618,8 +638,6 @@ def main():
         except : 
             print("only one gpu")
             
-
-
     if default_gpu:
         logger.info("***** Running training *****")
         logger.info("  Num examples = %d", len(train_dataset))
@@ -655,18 +673,23 @@ def main():
             caplens = caplens.to(device)
 
             # Forward prop.
-            _, _, _, _, _, _, _, _, _, _, pooled_output = model(
-                context, # input txt
-                features, # input imgs
-                spatials, # img loc
-                context_segment_ids, # token type id 
-                context_input_mask, # text attention mask
-                image_mask, # img attention mask 
-                co_attention_mask, # co attention mask 
-                None, #task_tokens, # default = None
+            sequence_output_t, sequence_output_v, pooled_output_t, pooled_output_v, all_attention_mask, pooled_output = model(
+                input_txt=context, # input txt
+                input_imgs=features, # input imgs
+                image_loc=spatials, # img loc
+                token_type_ids=context_segment_ids, # token type id 
+                attention_mask=context_input_mask, # text attention mask
+                image_attention_mask=image_mask, # img attention mask 
+                co_attention_mask=co_attention_mask, # co attention mask 
+                task_ids=None, #task_tokens, # default = None
             )
 
-            scores, caps_sorted, decode_lengths, alphas = decoder(pooled_output, caption, caplens)
+            vil_encoded_out = torch.cat((sequence_output_t, sequence_output_v), dim=1)
+            # print("---vil encoded out check !!! ---")
+            # print(vil_encoded_out.shape) #torch.Size([8, 251, 768])
+            # [batch_size, max_seq_len+max_region_num, emb_dim]
+
+            scores, caps_sorted, decode_lengths, alphas = decoder(vil_encoded_out, caption, caplens)
             scores_packed = pack_padded_sequence(scores, decode_lengths, batch_first=True)[0]
 
             targets = caps_sorted[:, 1:]
@@ -780,18 +803,31 @@ def main():
             caplens = caplens.to(device)
 
             # Forward prop.
-            _, _, _, _, _, _, _, _, _, _, pooled_output = model(
+            # _, _, _, _, _, _, _, _, _, _, pooled_output = model(
+            #     context, # input txt
+            #     features, # input imgs
+            #     spatials, # img loc
+            #     context_segment_ids, # token type id : (separates segment A from segment B)
+            #     context_input_mask, # text attention mask : (input_mask annotates real token sequence from padding)
+            #     image_mask, # img attention mask 
+            #     co_attention_mask, # co attention mask 
+            #     None, #task_tokens, # default = None
+            # )
+
+            sequence_output_t, sequence_output_v, pooled_output_t, pooled_output_v, all_attention_mask, pooled_output = model(
                 context, # input txt
                 features, # input imgs
                 spatials, # img loc
-                context_segment_ids, # token type id : (separates segment A from segment B)
-                context_input_mask, # text attention mask : (input_mask annotates real token sequence from padding)
+                context_segment_ids, # token type id 
+                context_input_mask, # text attention mask
                 image_mask, # img attention mask 
                 co_attention_mask, # co attention mask 
                 None, #task_tokens, # default = None
             )
 
-            scores, caps_sorted, decode_lengths, alphas = decoder(pooled_output, caption, caplens)
+            vil_encoded_out = torch.cat((sequence_output_t, sequence_output_v), dim=1)
+
+            scores, caps_sorted, decode_lengths, alphas = decoder(vil_encoded_out, caption, caplens)
             scores_packed = pack_padded_sequence(scores, decode_lengths, batch_first=True)[0]
 
             targets = caps_sorted[:, 1:]

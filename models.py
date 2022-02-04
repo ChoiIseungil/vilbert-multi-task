@@ -78,11 +78,32 @@ class Attention(nn.Module):
         :param decoder_hidden: previous decoder output, a tensor of dimension (batch_size, decoder_dim)
         :return: attention weighted encoding, weights
         """
-        att1 = self.encoder_att(encoder_out)  # (batch_size, num_pixels, attention_dim)
-        att2 = self.decoder_att(decoder_hidden)  # (batch_size, attention_dim)
+
+        # encoder_out = encoder_out.repeat(1, 1024, 1)
+        # print(f"I extend num pixels which means number of encoder hidden vectors : {encoder_out.shape}")
+
+        att1 = self.encoder_att(encoder_out)  # (batch_size, num_pixels, attention_dim)    @@8, 1024, 512
+        att2 = self.decoder_att(decoder_hidden)  # (batch_size, attention_dim)             @@8, 512
+
+        # ---in the attention function
+        # att1 shape : torch.Size([8, 1, 512])
+        # att2 shape : torch.Size([8, 512])
+        # att2 unsqueeze(1) shape : torch.Size([8, 1, 512])
+
+
         att = self.full_att(self.relu(att1 + att2.unsqueeze(1))).squeeze(2)  # (batch_size, num_pixels)
-        alpha = self.softmax(att)  # (batch_size, num_pixels)
+        # att = self.full_att(self.relu(att1 + att2.unsqueeze(1))).squeeze(1)  # (batch_size, attention_dim)
+        # print(f"att shape : {att.shape}") # 8, 1024 # att shape : torch.Size([8, 1024])
+
+        alpha = self.softmax(att)  # (batch_size, num_pixels) -> # (batch_size, attention_dim)
+        # print(f"alpha shape : {alpha.shape}") # alpha : attention score 
+
         attention_weighted_encoding = (encoder_out * alpha.unsqueeze(2)).sum(dim=1)  # (batch_size, encoder_dim)
+        # print(f"att_wei_enc shape : {attention_weighted_encoding.shape}") # att_wei_enc shape : torch.Size([8, 1024])
+        # att shape : torch.Size([8, 1])
+        # alpha shape : torch.Size([8, 1])
+        # att_wei_enc shape : torch.Size([8, 1024]) 
+        # the shape is same !
 
         return attention_weighted_encoding, alpha
 
@@ -92,7 +113,7 @@ class DecoderWithAttention(nn.Module):
     Decoder.
     """
 
-    def __init__(self, attention_dim, embed_dim, decoder_dim, vocab_size, encoder_dim=1024, dropout=0.5):
+    def __init__(self, attention_dim, embed_dim, decoder_dim, vocab_size, encoder_dim=768, dropout=0.5):
         """
         :param attention_dim: size of attention network
         :param embed_dim: embedding size
@@ -112,7 +133,7 @@ class DecoderWithAttention(nn.Module):
 
         self.attention = Attention(encoder_dim, decoder_dim, attention_dim)  # attention network
 
-        self.embedding = nn.Embedding(vocab_size, embed_dim)  # embedding layer
+        self.embedding = nn.Embedding(vocab_size, embed_dim)  # leanable embedding layer
         self.dropout = nn.Dropout(p=self.dropout)
         self.decode_step = nn.LSTMCell(embed_dim + encoder_dim, decoder_dim, bias=True)  # decoding LSTMCell
         self.init_h = nn.Linear(encoder_dim, decoder_dim)  # linear layer to find initial hidden state of LSTMCell
@@ -154,6 +175,11 @@ class DecoderWithAttention(nn.Module):
         :param encoder_out: encoded images, a tensor of dimension (batch_size, num_pixels, encoder_dim)
         :return: hidden state, cell state
         """
+        # print(f"### this print is from def init_hidden_state")
+        # print(f"### to check encoder out size")
+        # print(f"### encoder shape : {encoder_out.shape}")
+        ### encoder shape : torch.Size([8, 1, 1024])
+
         mean_encoder_out = encoder_out.mean(dim=1)
         h = self.init_h(mean_encoder_out)  # (batch_size, decoder_dim)
         c = self.init_c(mean_encoder_out)
@@ -173,9 +199,23 @@ class DecoderWithAttention(nn.Module):
         encoder_dim = encoder_out.size(-1)
         vocab_size = self.vocab_size
 
+        # batch size : 8 
+        # encoder_dim : 1024 
+        # encoder_out.shape : torch.Size([8, 1024])
+
         # Flatten image
-        encoder_out = encoder_out.view(batch_size, -1, encoder_dim)  # (batch_size, num_pixels, encoder_dim)
+        # encoder_out = encoder_out.view(batch_size, -1, encoder_dim)  # (batch_size, num_pixels, encoder_dim)
+        encoder_out = encoder_out.view(batch_size, -1, encoder_dim) # (batch_size, num_pixels, encoder_dim)
+        # print(f"check the encoder shape ; {encoder_out.shape}") # check the encoder shape ; torch.Size([8, 1024, 1024])
+
         num_pixels = encoder_out.size(1)
+
+        # after flatten, encoder shape : torch.Size([8, 1, 1024])
+        # WTF num pixels : 1
+
+        # print("--- in the forward ---")
+        # print(f"after flatten, encoder shape : {encoder_out.shape}")
+        # print(f"WTF num pixels : {num_pixels}")
 
         # Sort input data by decreasing lengths; why? apparent below
         caption_lengths, sort_ind = caption_lengths.squeeze(1).sort(dim=0, descending=True)
@@ -184,6 +224,7 @@ class DecoderWithAttention(nn.Module):
 
         # Embedding
         embeddings = self.embedding(encoded_captions)  # (batch_size, max_caption_length, embed_dim)
+        # print(f"embeddings shape : {embeddings.shape}") embeddings shape : torch.Size([8, 30, 512])
 
         # Initialize LSTM state
         h, c = self.init_hidden_state(encoder_out)  # (batch_size, decoder_dim)
@@ -191,6 +232,8 @@ class DecoderWithAttention(nn.Module):
         # We won't decode at the <end> position, since we've finished generating as soon as we generate <end>
         # So, decoding lengths are actual lengths - 1
         decode_lengths = (caption_lengths - 1).tolist()
+
+        # decode_lengths = caption_lengths.tolist()
 
         # Create tensors to hold word predicion scores and alphas
         predictions = torch.zeros(batch_size, max(decode_lengths), vocab_size).to(device)
@@ -201,8 +244,7 @@ class DecoderWithAttention(nn.Module):
         # then generate a new word in the decoder with the previous word and the attention weighted encoding
         for t in range(max(decode_lengths)):
             batch_size_t = sum([l > t for l in decode_lengths])
-            attention_weighted_encoding, alpha = self.attention(encoder_out[:batch_size_t],
-                                                                h[:batch_size_t])
+            attention_weighted_encoding, alpha = self.attention(encoder_out[:batch_size_t], h[:batch_size_t])
             gate = self.sigmoid(self.f_beta(h[:batch_size_t]))  # gating scalar, (batch_size_t, encoder_dim)
             attention_weighted_encoding = gate * attention_weighted_encoding
             h, c = self.decode_step(
@@ -218,7 +260,7 @@ class DecoderWithBertEmbedding(nn.Module):
 
     def __init__(self, vocab_size, use_glove, use_bert, tokenizer, BertModel):
         super(DecoderWithBertEmbedding, self).__init__()
-        self.encoder_dim = 1024 #2048
+        self.encoder_dim = 768 #1024 #2048
         self.attention_dim = 512
         self.use_bert = use_bert
         self.tokenizer = tokenizer 
@@ -414,7 +456,7 @@ class DecoderWithBertEmbedding(nn.Module):
             attention_weighted_encoding = (encoder_out[:batch_size_t] * alpha.unsqueeze(2)).sum(dim=1)
         
             gate = self.sigmoid(self.f_beta(h[:batch_size_t]))
-            attention_weighted_encoding = gate * attention_weighted_encoding
+            attention_weighted_encoding = gate * attention_weighted_encoding # 8, 1024
             # print(f"attention_weighted_encoding shape : {attention_weighted_encoding.shape}") 
             # attention_weighted_encoding shape : torch.Size([32, 1024])
             
